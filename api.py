@@ -129,7 +129,6 @@ class GitHubAPI:
             return []
 
     def get_user_avatar_bytes(self, avatar_url: str) -> bytes:
-        """下载头像（不带 Authorization，避免泄漏 token 到 CDN）"""
         if not avatar_url:
             return b""
         proxies = self.s.proxies or None
@@ -409,7 +408,6 @@ class GitHubAPI:
                          params={"per_page": 20}, use_etag=True)
 
     def download_action_logs(self, repo, run_id, dest_dir):
-        """下载某次 workflow run 的日志 zip，返回保存路径"""
         url = f"{API}/repos/{repo}/actions/runs/{run_id}/logs"
         tmp = os.path.join(dest_dir, f"_logs_{run_id}.zip")
         r = None
@@ -569,22 +567,26 @@ class GitHubAPI:
                 "-c", f"user.email={user}@users.noreply.github.com",
             ]
 
-        def _run(args, check=True):
-            cmd = ["git"] + self._git_auth_args() + extra_cfg + \
-                  ["-C", local_path] + args
+        def _run(args, check=True, capture=True):
+            cmd = ["git"] + extra_cfg + ["-C", local_path] + args
             if on_progress:
                 try:
                     on_progress(-1, f"$ git {' '.join(args)}")
                 except Exception:
                     pass
-            proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, encoding="utf-8", errors="replace")
-            out, err = proc.communicate()
-            if check and proc.returncode != 0:
-                msg = (err or out or "").strip()
-                raise RuntimeError(f"git {' '.join(args)} 失败：{msg[:500]}")
-            return out, err
+            if capture:
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, encoding="utf-8", errors="replace")
+                out, err = proc.communicate()
+                if check and proc.returncode != 0:
+                    msg = (err or out or "").strip()
+                    raise RuntimeError(f"git {' '.join(args)} 失败：{msg[:500]}")
+                return out, err
+            else:
+                proc = subprocess.run(cmd)
+                if check and proc.returncode != 0:
+                    raise RuntimeError(f"git {' '.join(args)} 失败（exit {proc.returncode}）")
 
         # 1) 初始化仓库
         if not is_git:
@@ -594,16 +596,19 @@ class GitHubAPI:
         # 2) 切到目标分支（空仓库也支持）
         _run(["checkout", "-B", branch], check=False)
 
-        # 3) 配置 origin
-        url = f"https://github.com/{repo}.git"
+        # 3) 配置 origin（临时在 URL 中嵌入 Token，绕过 extraheader 的兼容性问题）
+        auth_url = f"https://x-access-token:{self.token}@github.com/{repo}.git"
         out, _ = _run(["remote"], check=False)
         remotes = (out or "").split()
         if "origin" in remotes:
-            _run(["remote", "set-url", "origin", url])
+            _run(["remote", "set-url", "origin", auth_url])
         else:
-            _run(["remote", "add", "origin", url])
+            _run(["remote", "add", "origin", auth_url])
 
-        # 4) add & commit
+        # 4) 尝试合并远程已存在的提交（防止因 auto_init 导致历史冲突被拒）
+        _run(["pull", "origin", branch, "--allow-unrelated-histories", "--no-rebase"], check=False)
+
+        # 5) add & commit
         _run(["add", "-A"])
         status_out, _ = _run(["status", "--porcelain"], check=False)
         has_changes = bool((status_out or "").strip())
@@ -616,31 +621,38 @@ class GitHubAPI:
         if has_changes or not has_commit:
             _run(["commit", "-m", commit_message, "--allow-empty"])
 
-        # 5) push（流式输出，捕捉进度）
-        push_cmd = ["git"] + self._git_auth_args() + extra_cfg + \
-                   ["-C", local_path, "push", "-u", "origin", branch]
+        # 6) push（流式输出，捕捉进度）
+        push_cmd = ["git"] + extra_cfg + ["-C", local_path, "push", "-u", "origin", branch]
         if on_progress:
             try:
                 on_progress(-1, "正在推送…")
             except Exception:
                 pass
+
         proc = subprocess.Popen(
             push_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", bufsize=1)
         assert proc.stdout is not None
+        output_lines = []
         for line in proc.stdout:
+            output_lines.append(line)
             if on_progress and line.strip():
                 try:
                     on_progress(-1, line.strip())
                 except Exception:
                     pass
         proc.wait()
+
+        # 恢复不带 token 的 URL，防止本地 .git/config 泄露 token
+        _run(["remote", "set-url", "origin", f"https://github.com/{repo}.git"], check=False)
+
         if proc.returncode != 0:
-            raise RuntimeError(f"git push 失败（exit {proc.returncode}）")
+            full_output = "".join(output_lines).strip()
+            raise RuntimeError(f"git push 失败（exit {proc.returncode}）：\n{full_output[:1000]}")
 
         if on_progress:
             try:
                 on_progress(1.0, "推送完成")
             except Exception:
                 pass
-        return url
+        return f"https://github.com/{repo}"
