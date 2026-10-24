@@ -1,0 +1,23 @@
+# Python 编译缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller 打包产物
+build/
+dist/
+*.spec.bak
+
+# 本地环境
+venv/
+.venv/
+env/
+
+# 本地配置文件和数据库（防止隐私泄露）
+config.json
+cache.db
+app.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
