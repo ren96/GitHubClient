@@ -1,8 +1,9 @@
 import tkinter as tk
 import threading
 import webbrowser
-from tkinter import ttk, messagebox
+import os
 import re
+from tkinter import ttk, messagebox, filedialog
 
 from oauth import DeviceFlow
 
@@ -642,3 +643,118 @@ class OAuthDialog(tk.Toplevel):
         self._safe_call(lambda: self.code_var.set(""))
         self._safe_call(lambda: self.link.configure(text=""))
         self._start()
+
+
+class UploadProjectDialog(tk.Toplevel):
+    """把本地项目上传到 GitHub 仓库"""
+
+    def __init__(self, parent, default_dir=""):
+        super().__init__(parent)
+        self.title("上传项目到 GitHub")
+        self.result = None
+        self.transient(parent)
+        self.grab_set()
+        self.geometry("660x580")
+        self.resizable(False, False)
+        try:
+            self.iconbitmap(parent.icon_path)
+        except Exception:
+            pass
+
+        f = ttk.Frame(self, padding=18)
+        f.pack(fill="both", expand=True)
+
+        ttk.Label(f, text="本地目录 *",
+                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        row = ttk.Frame(f)
+        row.pack(fill="x", pady=(4, 12))
+        self.dir_var = tk.StringVar(value=default_dir)
+        ttk.Entry(row, textvariable=self.dir_var).pack(
+            side="left", fill="x", expand=True)
+        ttk.Button(row, text="浏览…", command=self._browse).pack(
+            side="left", padx=(6, 0))
+
+        ttk.Label(f, text="仓库名称 *",
+                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        self.name_var = tk.StringVar()
+        ttk.Entry(f, textvariable=self.name_var).pack(fill="x", pady=(4, 12))
+
+        ttk.Label(f, text="描述",
+                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        self.desc_var = tk.StringVar()
+        ttk.Entry(f, textvariable=self.desc_var).pack(fill="x", pady=(4, 12))
+
+        opts = ttk.Frame(f)
+        opts.pack(fill="x", pady=(0, 12))
+        self.private_var = tk.BooleanVar()
+        ttk.Checkbutton(opts, text="私有仓库",
+                        variable=self.private_var).pack(side="left")
+        self.ignore_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(opts, text="如无 .gitignore 则自动生成通用版本",
+                        variable=self.ignore_var).pack(side="left", padx=(16, 0))
+
+        ttk.Label(f, text="分支名",
+                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        self.branch_var = tk.StringVar(value="main")
+        ttk.Entry(f, textvariable=self.branch_var).pack(fill="x", pady=(4, 12))
+
+        ttk.Label(f, text="首次提交信息",
+                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        self.msg_var = tk.StringVar(value="Initial commit")
+        ttk.Entry(f, textvariable=self.msg_var).pack(fill="x", pady=(4, 12))
+
+        ttk.Label(f, style="Hint.TLabel", wraplength=600, justify="left",
+                  text=("· 如果同名仓库已存在，会直接推送到该仓库\n"
+                        "· 如果目录还不是 Git 仓库，会自动 git init\n"
+                        "· 需要本机安装 Git 且在 PATH 中")).pack(anchor="w")
+
+        bar = ttk.Frame(f)
+        bar.pack(fill="x", side="bottom", pady=(16, 0))
+        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="开始上传", style="Accent.TButton",
+                   command=self._save).pack(side="right", padx=(0, 8))
+
+        if default_dir:
+            self._apply_dir_defaults(default_dir)
+
+    def _browse(self):
+        d = filedialog.askdirectory(title="选择要上传的本地项目目录")
+        if d:
+            self.dir_var.set(d)
+            self._apply_dir_defaults(d)
+
+    def _apply_dir_defaults(self, d):
+        base = os.path.basename(os.path.normpath(d)) or ""
+        if base and not self.name_var.get():
+            safe = re.sub(r"[^\w.-]", "-", base).strip("-._")
+            if safe:
+                self.name_var.set(safe[:100])
+
+    def _save(self):
+        local = self.dir_var.get().strip()
+        if not local or not os.path.isdir(local):
+            messagebox.showwarning("提示", "请选择有效的本地目录", parent=self)
+            return
+        name = self.name_var.get().strip()
+        if not name:
+            messagebox.showwarning("提示", "仓库名不能为空", parent=self)
+            return
+        if not REPO_NAME_RE.match(name):
+            messagebox.showwarning(
+                "提示", "仓库名格式非法（字母/数字/._-，最长100字符）", parent=self)
+            return
+        branch = self.branch_var.get().strip() or "main"
+        if not re.match(r"^[\w./-]+$", branch):
+            messagebox.showwarning("提示", "分支名格式非法", parent=self)
+            return
+        msg = self.msg_var.get().strip() or "Initial commit"
+        self.result = {
+            "local": local,
+            "name": name,
+            "description": self.desc_var.get().strip(),
+            "private": self.private_var.get(),
+            "branch": branch,
+            "commit_message": msg,
+            "add_gitignore": self.ignore_var.get(),
+        }
+        self.destroy()

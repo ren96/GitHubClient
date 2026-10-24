@@ -549,3 +549,98 @@ class GitHubAPI:
         if proc.returncode != 0:
             raise RuntimeError(f"git pull 失败：{(err or '').strip()}")
         return (out or "") + (err or "")
+
+    # ---------- upload local project ----------
+    def init_and_push_local(self, local_path, repo, branch="main",
+                            commit_message="Initial commit", user=None,
+                            on_progress=None):
+        """把本地目录推送到 GitHub 仓库（自动 init / commit / push）"""
+        import shutil as _shutil
+        if not os.path.isdir(local_path):
+            raise RuntimeError(f"目录不存在：{local_path}")
+        if not _shutil.which("git"):
+            raise RuntimeError("找不到 git 命令，请先安装 Git 并加入 PATH")
+
+        is_git = os.path.isdir(os.path.join(local_path, ".git"))
+        extra_cfg = []
+        if user:
+            extra_cfg = [
+                "-c", f"user.name={user}",
+                "-c", f"user.email={user}@users.noreply.github.com",
+            ]
+
+        def _run(args, check=True):
+            cmd = ["git"] + self._git_auth_args() + extra_cfg + \
+                  ["-C", local_path] + args
+            if on_progress:
+                try:
+                    on_progress(-1, f"$ git {' '.join(args)}")
+                except Exception:
+                    pass
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace")
+            out, err = proc.communicate()
+            if check and proc.returncode != 0:
+                msg = (err or out or "").strip()
+                raise RuntimeError(f"git {' '.join(args)} 失败：{msg[:500]}")
+            return out, err
+
+        # 1) 初始化仓库
+        if not is_git:
+            _run(["init"])
+            is_git = True
+
+        # 2) 切到目标分支（空仓库也支持）
+        _run(["checkout", "-B", branch], check=False)
+
+        # 3) 配置 origin
+        url = f"https://github.com/{repo}.git"
+        out, _ = _run(["remote"], check=False)
+        remotes = (out or "").split()
+        if "origin" in remotes:
+            _run(["remote", "set-url", "origin", url])
+        else:
+            _run(["remote", "add", "origin", url])
+
+        # 4) add & commit
+        _run(["add", "-A"])
+        status_out, _ = _run(["status", "--porcelain"], check=False)
+        has_changes = bool((status_out or "").strip())
+        has_commit = False
+        try:
+            h_out, _ = _run(["rev-parse", "--verify", "HEAD"], check=False)
+            has_commit = bool((h_out or "").strip())
+        except Exception:
+            has_commit = False
+        if has_changes or not has_commit:
+            _run(["commit", "-m", commit_message, "--allow-empty"])
+
+        # 5) push（流式输出，捕捉进度）
+        push_cmd = ["git"] + self._git_auth_args() + extra_cfg + \
+                   ["-C", local_path, "push", "-u", "origin", branch]
+        if on_progress:
+            try:
+                on_progress(-1, "正在推送…")
+            except Exception:
+                pass
+        proc = subprocess.Popen(
+            push_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", bufsize=1)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if on_progress and line.strip():
+                try:
+                    on_progress(-1, line.strip())
+                except Exception:
+                    pass
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"git push 失败（exit {proc.returncode}）")
+
+        if on_progress:
+            try:
+                on_progress(1.0, "推送完成")
+            except Exception:
+                pass
+        return url

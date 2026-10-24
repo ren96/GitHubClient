@@ -16,7 +16,7 @@ from utils import (
 from config import ConfigStore, Cache, KEYRING_OK
 from api import GitHubAPI
 from dialogs import (IssueDialog, CreateRepoDialog, CommentDialog,
-                     SettingsDialog, OAuthDialog)
+                     SettingsDialog, OAuthDialog, UploadProjectDialog)
 from repo_detail import RepoDetailWindow
 from issue_detail import IssueDetailWindow
 from pr_detail import PRDetailWindow
@@ -25,6 +25,43 @@ from command_palette import CommandPalette
 from download_queue import DownloadQueueWindow, DownloadTask
 
 REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
+
+_DEFAULT_GITIGNORE = """\
+# System
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# IDE
+.idea/
+.vscode/
+
+# Env
+.env
+.env.local
+
+# Build
+dist/
+build/
+*.log
+"""
 
 
 class GitHubApp(tk.Tk):
@@ -413,9 +450,9 @@ class GitHubApp(tk.Tk):
         if win is not None:
             try:
                 if win.winfo_exists():
-                    win.deiconify();
-                    win.lift();
-                    win.focus_set();
+                    win.deiconify()
+                    win.lift()
+                    win.focus_set()
                     return
             except tk.TclError:
                 pass
@@ -439,7 +476,7 @@ class GitHubApp(tk.Tk):
         txt.configure(state="disabled")
         ttk.Button(win, text="关闭", command=win.destroy).pack(fill="x")
         win.bind("<Escape>", lambda _e: win.destroy())
-        win.lift();
+        win.lift()
         win.focus_set()
 
     def _command_palette(self):
@@ -447,13 +484,17 @@ class GitHubApp(tk.Tk):
         existing = getattr(self, "_cmd_palette", None)
         if existing is not None:
             try:
-                if existing.winfo_exists(): existing.lift(); existing.focus_force(); return
+                if existing.winfo_exists():
+                    existing.lift()
+                    existing.focus_force()
+                    return
             except tk.TclError:
                 pass
         try:
             self._cmd_palette = CommandPalette(self, self._repo_cache)
         except Exception:
-            logging.exception("命令面板失败"); self._cmd_palette = None
+            logging.exception("命令面板失败")
+            self._cmd_palette = None
 
     def _quit(self):
         try:
@@ -493,7 +534,7 @@ class GitHubApp(tk.Tk):
             w = focused
             while w is not None:
                 if w == self.issue_tree:
-                    self.delete_issue();
+                    self.delete_issue()
                     return
                 w = getattr(w, "master", None)
         except Exception:
@@ -526,13 +567,15 @@ class GitHubApp(tk.Tk):
 
     def _switch_account(self):
         if not self.cfg.profiles:
-            messagebox.showinfo("提示", "还没有保存的账号");
+            messagebox.showinfo("提示", "还没有保存的账号")
             return
         name = simpledialog.askstring("切换账号", f"已保存账号：\n{', '.join(self.cfg.profiles)}\n\n输入要切换到的账号：",
                                       parent=self)
         if not name or name not in self.cfg.profiles: return
         tok = self.cfg.get_token(name)
-        if not tok: messagebox.showerror("错误", "该账号没有本地 Token"); return
+        if not tok:
+            messagebox.showerror("错误", "该账号没有本地 Token")
+            return
         self._login_with(tok, remember=True)
 
     def _fetch_scopes_async(self):
@@ -651,13 +694,15 @@ class GitHubApp(tk.Tk):
     def do_login(self):
         token = self.token_entry.get().strip()
         if not token:
-            self.status.configure(text="请输入 Token", style="Danger.TLabel");
+            self.status.configure(text="请输入 Token", style="Danger.TLabel")
             return
         self._login_with(token, self.remember_var.get())
 
     def do_oauth_login(self):
         cid = self.cfg.oauth_client_id.strip()
-        if not cid: messagebox.showinfo("提示", "请先在设置中填入 OAuth App 的 Client ID"); return
+        if not cid:
+            messagebox.showinfo("提示", "请先在设置中填入 OAuth App 的 Client ID")
+            return
         dlg = OAuthDialog(self, cid, proxy=self.cfg.proxy)
         self.wait_window(dlg)
         if not dlg.token: return
@@ -825,6 +870,7 @@ class GitHubApp(tk.Tk):
         ttk.Button(sbar, text="➕ 新建仓库", style="Accent.TButton", command=self.create_repo).pack(side="right")
         ttk.Button(sbar, text="🗑️ 删除仓库", style="Danger.TButton", command=self.delete_repo).pack(side="right",
                                                                                                     padx=(0, 6))
+        ttk.Button(sbar, text="🚀 上传项目", command=self.upload_project).pack(side="right", padx=(0, 6))
 
         self.repo_filter_var = tk.StringVar()
         fbar = ttk.Frame(tab)
@@ -1057,12 +1103,17 @@ class GitHubApp(tk.Tk):
 
     def delete_repo(self):
         repo = self._selected(self.repo_tree)
-        if not repo or str(repo).startswith("__state__"): messagebox.showinfo("提示", "先选中一个仓库"); return
+        if not repo or str(repo).startswith("__state__"):
+            messagebox.showinfo("提示", "先选中一个仓库")
+            return
         owner = repo.split("/", 1)[0]
-        if owner != (self.current_user or ""): messagebox.showwarning("注意", "该仓库可能不属于你个人，请确认权限。")
+        if owner != (self.current_user or ""):
+            messagebox.showwarning("注意", "该仓库可能不属于你个人，请确认权限。")
         if not messagebox.askyesno("⚠️ 危险操作", f"确定删除 {repo}？不可撤销。", icon="warning"): return
         confirm = simpledialog.askstring("最终确认", f"输入仓库全名确认删除：\n{repo}", parent=self)
-        if confirm != repo: messagebox.showinfo("已取消", "名称不匹配"); return
+        if confirm != repo:
+            messagebox.showinfo("已取消", "名称不匹配")
+            return
 
         def ok(_):
             self._status(f"已删除 {repo}")
@@ -1075,6 +1126,78 @@ class GitHubApp(tk.Tk):
             self.after(800, lambda: self.load_repos(reset=True))
 
         self.run_async(lambda: self.api.delete_repo(repo), ok)
+
+    def upload_project(self):
+        """把本地目录上传到 GitHub 仓库"""
+        if not self._focus_in_app():
+            return
+        if not self.api:
+            messagebox.showinfo("提示", "请先登录")
+            return
+
+        default_dir = self.cfg.last_dir or ""
+        dlg = UploadProjectDialog(self, default_dir=default_dir)
+        self.wait_window(dlg)
+        if not dlg.result:
+            return
+        r = dlg.result
+        full = f"{self.current_user}/{r['name']}"
+        if not messagebox.askyesno(
+                "确认上传",
+                f"本地目录：\n{r['local']}\n\n"
+                f"将推送到：\n{full}\n"
+                f"分支：{r['branch']}（{'私有' if r['private'] else '公开'}）\n\n继续？",
+                parent=self):
+            return
+
+        # 可选：自动生成 .gitignore
+        if r["add_gitignore"]:
+            gi = os.path.join(r["local"], ".gitignore")
+            if not os.path.exists(gi):
+                try:
+                    with open(gi, "w", encoding="utf-8") as fp:
+                        fp.write(_DEFAULT_GITIGNORE)
+                except OSError as e:
+                    logging.warning(f"写入 .gitignore 失败：{e}")
+
+        def work():
+            # 仓库不存在则创建（auto_init=False 避免空仓库冲突）
+            exists = False
+            try:
+                self.api.get_repo(full)
+                exists = True
+            except RuntimeError:
+                exists = False
+            if not exists:
+                self.api.create_repo(
+                    r["name"], description=r["description"],
+                    private=r["private"], auto_init=False)
+            return self.api.init_and_push_local(
+                r["local"], full,
+                branch=r["branch"],
+                commit_message=r["commit_message"],
+                user=self.current_user,
+                on_progress=lambda p, line: self.after(
+                    0, lambda: self._status(line, 8000)),
+            )
+
+        def ok(url):
+            self._status(f"已上传：{full}")
+            self.cfg.add_recent_repo(full)
+            self._refresh_repo_switch()
+            self.after(600, lambda: self.load_repos(reset=True))
+            messagebox.showinfo(
+                "上传完成",
+                f"已推送到：\n{full}\n\n{url}\n\n"
+                f"可在浏览器打开仓库查看。",
+                parent=self)
+
+        def err(e):
+            self._status("上传失败")
+            self._err(e)
+
+        self._status("正在上传项目…")
+        self.run_async(work, ok, err)
 
     # ---------- 搜索 ----------
     def _build_search_tab(self, nb):
@@ -1382,17 +1505,25 @@ class GitHubApp(tk.Tk):
 
     def _fetch_labels_async(self, repo, callback):
         cached = self._labels_cache.get(repo)
-        if cached is not None: callback(cached); return
+        if cached is not None:
+            callback(cached)
+            return
 
-        def ok(labels): self._labels_cache[repo] = labels; callback(labels)
+        def ok(labels):
+            self._labels_cache[repo] = labels
+            callback(labels)
 
-        def err(_e): self._labels_cache[repo] = []; callback([])
+        def err(_e):
+            self._labels_cache[repo] = []
+            callback([])
 
         self.run_async(lambda: self.api.list_labels(repo), ok, err)
 
     def new_issue(self):
         if not self._focus_in_app(): return
-        if not self.current_repo: messagebox.showinfo("提示", "先在「我的仓库」中选中一个仓库"); return
+        if not self.current_repo:
+            messagebox.showinfo("提示", "先在「我的仓库」中选中一个仓库")
+            return
         repo = self.current_repo
 
         def open_dialog(labels):
@@ -1455,7 +1586,9 @@ class GitHubApp(tk.Tk):
         if not sel or str(sel[0]).startswith("__state__"): return
         number = int(sel[0])
         node_id = self.issue_nodes.get(number)
-        if not node_id: messagebox.showerror("错误", "缺少 node_id，请刷新"); return
+        if not node_id:
+            messagebox.showerror("错误", "缺少 node_id，请刷新")
+            return
         if not messagebox.askyesno("⚠️ 永久删除", f"永久删除 #{number}？不可恢复。", icon="warning"): return
 
         def done(_):
@@ -1713,7 +1846,7 @@ class GitHubApp(tk.Tk):
                 if not self.star_tree.exists(r["full_name"]):
                     self.star_tree.insert("", "end", iid=r["full_name"],
                                           values=(
-                                          r["full_name"], r["stargazers_count"], r.get("language") or "—", desc),
+                                              r["full_name"], r["stargazers_count"], r.get("language") or "—", desc),
                                           tags=("odd",) if i % 2 else ("even",))
             self._status(f"已加载第 {page} 页 starred")
 
@@ -1736,9 +1869,13 @@ class GitHubApp(tk.Tk):
     # ---------- 详情 / 下载 ----------
     def _show_detail_for(self, tree):
         iid = self._selected(tree)
-        if not iid or str(iid).startswith("__state__"): messagebox.showinfo("提示", "先在列表中选中一个仓库"); return
+        if not iid or str(iid).startswith("__state__"):
+            messagebox.showinfo("提示", "先在列表中选中一个仓库")
+            return
         repo = self._extract_repo(iid)
-        if not REPO_RE.match(repo): messagebox.showinfo("提示", "请选择一个仓库"); return
+        if not REPO_RE.match(repo):
+            messagebox.showinfo("提示", "请选择一个仓库")
+            return
         self.cfg.add_recent_repo(repo)
         self._refresh_repo_switch()
         cached = self._repo_cache.get(repo)
@@ -1790,11 +1927,14 @@ class GitHubApp(tk.Tk):
 
     def _pull_for_repo_tab(self):
         iid = self._selected(self.repo_tree)
-        if not iid or str(iid).startswith("__state__"): messagebox.showinfo("提示", "先选中一个仓库"); return
+        if not iid or str(iid).startswith("__state__"):
+            messagebox.showinfo("提示", "先选中一个仓库")
+            return
         repo = self._extract_repo(iid)
         local = self._local_repo_path(repo)
         if not local:
-            if messagebox.askyesno("未找到本地仓库", "未在下载目录找到 .git。\n是否 clone？"): self._clone_for_repo_tab()
+            if messagebox.askyesno("未找到本地仓库", "未在下载目录找到 .git。\n是否 clone？"):
+                self._clone_for_repo_tab()
             return
 
         def ok(out):
@@ -1805,7 +1945,9 @@ class GitHubApp(tk.Tk):
 
     def _run_zip(self, tree, progress, buttons):
         iid = self._selected(tree)
-        if not iid or str(iid).startswith("__state__"): messagebox.showinfo("提示", "先选中一个仓库"); return
+        if not iid or str(iid).startswith("__state__"):
+            messagebox.showinfo("提示", "先选中一个仓库")
+            return
         repo = self._extract_repo(iid)
         dest = filedialog.askdirectory(title="选择保存目录", initialdir=self._initial_dir())
         if not dest: return
@@ -1820,7 +1962,9 @@ class GitHubApp(tk.Tk):
 
     def _run_clone(self, tree, progress, buttons):
         iid = self._selected(tree)
-        if not iid or str(iid).startswith("__state__"): messagebox.showinfo("提示", "先选中一个仓库"); return
+        if not iid or str(iid).startswith("__state__"):
+            messagebox.showinfo("提示", "先选中一个仓库")
+            return
         repo = self._extract_repo(iid)
         dest = filedialog.askdirectory(title="选择克隆目录", initialdir=self._initial_dir())
         if not dest: return
@@ -1852,18 +1996,24 @@ class GitHubApp(tk.Tk):
 
     def _download_installer_for_repo_tab(self):
         iid = self._selected(self.repo_tree)
-        if not iid or str(iid).startswith("__state__"): messagebox.showinfo("提示", "先选中一个仓库"); return
+        if not iid or str(iid).startswith("__state__"):
+            messagebox.showinfo("提示", "先选中一个仓库")
+            return
         self._download_latest_release(self._extract_repo(iid))
 
     def _download_installer_for_search_tab(self):
         iid = self._selected(self.search_tree)
-        if not iid or str(iid).startswith("__state__"): messagebox.showinfo("提示", "先选中一个仓库"); return
+        if not iid or str(iid).startswith("__state__"):
+            messagebox.showinfo("提示", "先选中一个仓库")
+            return
         self._download_latest_release(self._extract_repo(iid))
 
     def _download_latest_release(self, repo):
         def got(rel):
             assets = rel.get("assets") or []
-            if not assets: messagebox.showinfo("提示", f"{repo} 最新 Release 无安装包"); return
+            if not assets:
+                messagebox.showinfo("提示", f"{repo} 最新 Release 无安装包")
+                return
             dest = filedialog.askdirectory(title="选择保存目录", initialdir=self._initial_dir())
             if not dest: return
             for a in assets: self._enqueue_download(repo, a, dest)
