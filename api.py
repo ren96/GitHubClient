@@ -17,6 +17,7 @@ GRAPHQL = "https://api.github.com/graphql"
 class GitHubAPI:
     def __init__(self, token: str, proxy: str = "", cache=None):
         self.token = token
+        self.proxy = proxy  # 记录代理，传递给 git 命令
         self.cache = cache
         self.s = requests.Session()
         self.s.headers.update({
@@ -512,11 +513,19 @@ class GitHubAPI:
         auth = base64.b64encode(f"x-access-token:{self.token}".encode()).decode()
         return ["-c", f"http.extraheader=Authorization: Basic {auth}"]
 
+    def _git_proxy_args(self):
+        """显式传递代理配置给 git，避免系统全局错误代理干扰"""
+        if self.proxy:
+            return ["-c", f"http.proxy={self.proxy}", "-c", f"https.proxy={self.proxy}"]
+        else:
+            # 用户没填代理，强制直连（清空环境中的代理配置）
+            return ["-c", "http.proxy=", "-c", "https.proxy="]
+
     def clone_repo(self, repo, dest_dir, depth=1, on_progress=None):
         target = os.path.join(dest_dir, repo.split("/")[-1])
         if os.path.exists(target):
             raise RuntimeError(f"目标目录已存在：{target}")
-        cmd = ["git"] + self._git_auth_args() + ["clone"]
+        cmd = ["git"] + self._git_proxy_args() + self._git_auth_args() + ["clone"]
         if depth:
             cmd += ["--depth", str(depth)]
         cmd += ["--progress", f"https://github.com/{repo}.git", target]
@@ -540,7 +549,7 @@ class GitHubAPI:
     def pull_repo(self, local_path, on_progress=None):
         if not os.path.isdir(os.path.join(local_path, ".git")):
             raise RuntimeError(f"不是 git 仓库：{local_path}")
-        cmd = ["git"] + self._git_auth_args() + ["-C", local_path, "pull"]
+        cmd = ["git"] + self._git_proxy_args() + self._git_auth_args() + ["-C", local_path, "pull"]
         proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
                                 text=True, encoding="utf-8", errors="replace")
         out, err = proc.communicate()
@@ -568,7 +577,7 @@ class GitHubAPI:
             ]
 
         def _run(args, check=True, capture=True):
-            cmd = ["git"] + extra_cfg + ["-C", local_path] + args
+            cmd = ["git"] + self._git_proxy_args() + extra_cfg + ["-C", local_path] + args
             if on_progress:
                 try:
                     on_progress(-1, f"$ git {' '.join(args)}")
@@ -622,7 +631,7 @@ class GitHubAPI:
             _run(["commit", "-m", commit_message, "--allow-empty"])
 
         # 6) push（流式输出，捕捉进度）
-        push_cmd = ["git"] + extra_cfg + ["-C", local_path, "push", "-u", "origin", branch]
+        push_cmd = ["git"] + self._git_proxy_args() + extra_cfg + ["-C", local_path, "push", "-u", "origin", branch]
         if on_progress:
             try:
                 on_progress(-1, "正在推送…")
