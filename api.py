@@ -17,7 +17,7 @@ GRAPHQL = "https://api.github.com/graphql"
 class GitHubAPI:
     def __init__(self, token: str, proxy: str = "", cache=None):
         self.token = token
-        self.proxy = proxy  # 记录代理，传递给 git 命令
+        self.proxy = proxy
         self.cache = cache
         self.s = requests.Session()
         self.s.headers.update({
@@ -513,13 +513,26 @@ class GitHubAPI:
         auth = base64.b64encode(f"x-access-token:{self.token}".encode()).decode()
         return ["-c", f"http.extraheader=Authorization: Basic {auth}"]
 
+    def _git_env(self):
+        """构建纯净的 Git 运行环境，移除系统错误代理"""
+        env = os.environ.copy()
+        if self.proxy:
+            env["HTTP_PROXY"] = self.proxy
+            env["HTTPS_PROXY"] = self.proxy
+            env["http_proxy"] = self.proxy
+            env["https_proxy"] = self.proxy
+        else:
+            for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
+                env.pop(k, None)
+        return env
+
     def _git_proxy_args(self):
-        """显式传递代理配置给 git，避免系统全局错误代理干扰"""
+        """强制忽略系统代理配置"""
         if self.proxy:
             return ["-c", f"http.proxy={self.proxy}", "-c", f"https.proxy={self.proxy}"]
         else:
-            # 用户没填代理，强制直连（清空环境中的代理配置）
-            return ["-c", "http.proxy=", "-c", "https.proxy="]
+            # 修复：移除了非法的 env.http_proxy 和 env.https_proxy 配置项
+            return ["-c", "http.proxy=", "-c", "https.proxy=", "-c", "all.proxy="]
 
     def clone_repo(self, repo, dest_dir, depth=1, on_progress=None):
         target = os.path.join(dest_dir, repo.split("/")[-1])
@@ -532,7 +545,8 @@ class GitHubAPI:
         try:
             proc = subprocess.Popen(
                 cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                text=True, bufsize=1, encoding="utf-8", errors="replace")
+                text=True, bufsize=1, encoding="utf-8", errors="replace",
+                env=self._git_env())
         except FileNotFoundError:
             raise RuntimeError("找不到 git 命令")
         for line in proc.stderr:
@@ -551,7 +565,8 @@ class GitHubAPI:
             raise RuntimeError(f"不是 git 仓库：{local_path}")
         cmd = ["git"] + self._git_proxy_args() + self._git_auth_args() + ["-C", local_path, "pull"]
         proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
-                                text=True, encoding="utf-8", errors="replace")
+                                text=True, encoding="utf-8", errors="replace",
+                                env=self._git_env())
         out, err = proc.communicate()
         if proc.returncode != 0:
             raise RuntimeError(f"git pull 失败：{(err or '').strip()}")
@@ -576,8 +591,11 @@ class GitHubAPI:
                 "-c", f"user.email={user}@users.noreply.github.com",
             ]
 
+        git_env = self._git_env()
+        proxy_args = self._git_proxy_args()
+
         def _run(args, check=True, capture=True):
-            cmd = ["git"] + self._git_proxy_args() + extra_cfg + ["-C", local_path] + args
+            cmd = ["git"] + proxy_args + extra_cfg + ["-C", local_path] + args
             if on_progress:
                 try:
                     on_progress(-1, f"$ git {' '.join(args)}")
@@ -586,14 +604,15 @@ class GitHubAPI:
             if capture:
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, encoding="utf-8", errors="replace")
+                    text=True, encoding="utf-8", errors="replace",
+                    env=git_env)
                 out, err = proc.communicate()
                 if check and proc.returncode != 0:
                     msg = (err or out or "").strip()
                     raise RuntimeError(f"git {' '.join(args)} 失败：{msg[:500]}")
                 return out, err
             else:
-                proc = subprocess.run(cmd)
+                proc = subprocess.run(cmd, env=git_env)
                 if check and proc.returncode != 0:
                     raise RuntimeError(f"git {' '.join(args)} 失败（exit {proc.returncode}）")
 
@@ -631,7 +650,7 @@ class GitHubAPI:
             _run(["commit", "-m", commit_message, "--allow-empty"])
 
         # 6) push（流式输出，捕捉进度）
-        push_cmd = ["git"] + self._git_proxy_args() + extra_cfg + ["-C", local_path, "push", "-u", "origin", branch]
+        push_cmd = ["git"] + proxy_args + extra_cfg + ["-C", local_path, "push", "-u", "origin", branch]
         if on_progress:
             try:
                 on_progress(-1, "正在推送…")
@@ -640,7 +659,8 @@ class GitHubAPI:
 
         proc = subprocess.Popen(
             push_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace", bufsize=1)
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+            env=git_env)
         assert proc.stdout is not None
         output_lines = []
         for line in proc.stdout:
