@@ -16,13 +16,15 @@ from utils import (
 from config import ConfigStore, Cache, KEYRING_OK
 from api import GitHubAPI
 from dialogs import (IssueDialog, CreateRepoDialog, CommentDialog,
-                     SettingsDialog, OAuthDialog, UploadProjectDialog)
+                     SettingsDialog, OAuthDialog, UploadProjectDialog, UpdateDialog)
 from repo_detail import RepoDetailWindow
 from issue_detail import IssueDetailWindow
 from pr_detail import PRDetailWindow
 from gist_tab import GistTab
 from command_palette import CommandPalette
 from download_queue import DownloadQueueWindow, DownloadTask
+from version import __version__ as APP_VERSION
+import updater
 
 REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
 
@@ -94,6 +96,7 @@ class GitHubApp(tk.Tk):
         self._pull_page = 0
         self._debounce_after = None
         self._search_after = None
+        self._assignee_after = None
 
         # 请求代次
         self._gen_repos = 0
@@ -109,6 +112,9 @@ class GitHubApp(tk.Tk):
 
         self._shortcuts_win = None
         self._cmd_palette = None
+
+        # 更新
+        self._update_check_launched = False
 
         self.cfg = ConfigStore()
         self.cache = Cache()
@@ -172,8 +178,8 @@ class GitHubApp(tk.Tk):
         # ② Windows 必须显式设置主窗口图标，否则依然会显示 Tk 默认图标
         if sys.platform == "win32":
             try:
-                self.iconbitmap(self.icon_path)              # 修复：显式给主窗口设置
-                self.iconbitmap(default=self.icon_path)      # 让 Toplevel 子窗口继承
+                self.iconbitmap(self.icon_path)
+                self.iconbitmap(default=self.icon_path)
             except Exception as e:
                 logging.warning(f"iconbitmap 加载失败: {e}")
 
@@ -417,21 +423,37 @@ class GitHubApp(tk.Tk):
 
     def _tree_set_state(self, tree, kind, msg="", retry=None):
         for iid in tree.get_children():
-            if str(iid).startswith("__state__"): tree.delete(iid)
+            if str(iid).startswith("__state__"):
+                tree.delete(iid)
         icon = {"loading": "⏳ ", "empty": "📭 ", "error": "❌ "}.get(kind, "")
         cols = tree["columns"]
         vals = [icon + msg] + [""] * (len(cols) - 1)
         tree.insert("", "end", iid="__state__", values=vals, tags=(kind,))
-        if kind == "error" and retry:
-            tree.bind("<Double-1>", lambda _e: retry(), add="+")
+
+        # 记录当前重试回调；只绑定一次，避免多次累加
+        tree._current_retry = retry if kind == "error" else None
+        if kind == "error" and retry and not getattr(tree, "_retry_bound", False):
+            def _on_retry(_e):
+                sel = tree.selection()
+                if not sel or not str(sel[0]).startswith("__state__"):
+                    return
+                fn = getattr(tree, "_current_retry", None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        logging.exception("tree 重试失败")
+            tree.bind("<Double-1>", _on_retry, add="+")
+            tree._retry_bound = True
 
     def _bind_shortcuts(self):
         self.bind_all("<Control-f>", lambda _e: self._focus_search())
         self.bind_all("<Control-k>", lambda _e: self._command_palette())
         self.bind_all("<Control-n>", lambda _e: self.new_issue())
-        self.bind_all("<Control-s>", lambda _e: self.toggle_theme())
+        self.bind_all("<Control-s>", lambda _e: self._focus_in_app() and self.toggle_theme())
         self.bind_all("<Control-p>", lambda _e: self._open_settings())
-        self.bind_all("<Control-q>", lambda _e: self._quit())
+        self.bind_all("<Control-u>", lambda _e: self._focus_in_app() and self.check_update(manual=True))
+        self.bind_all("<Control-q>", lambda _e: self._focus_in_app() and self._quit())
         self.bind_all("<F5>", lambda _e: self._refresh_current())
         self.bind_all("<F1>", lambda _e: self._show_shortcuts())
         self.bind_all("<Delete>", self._delete_selected)
@@ -459,7 +481,7 @@ class GitHubApp(tk.Tk):
         win = tk.Toplevel(self)
         self._shortcuts_win = win
         win.title("快捷键")
-        win.geometry("460x460")
+        win.geometry("460x500")
         win.transient(self)
         try:
             win.iconbitmap(self.icon_path)
@@ -470,7 +492,8 @@ class GitHubApp(tk.Tk):
         txt.pack(fill="both", expand=True)
         txt.insert("1.0",
                    "Ctrl+F    搜索\nCtrl+K    命令面板\nCtrl+N    新建 Issue\n"
-                   "Ctrl+S    切换主题\nCtrl+P    设置\nCtrl+Q    退出\n"
+                   "Ctrl+S    切换主题\nCtrl+P    设置\nCtrl+U    检查更新\n"
+                   "Ctrl+Q    退出\n"
                    "F5        刷新当前页\nF1        显示本面板\n"
                    "Delete    删除选中 Issue\n双击仓库  查看详情\n")
         txt.configure(state="disabled")
@@ -525,6 +548,10 @@ class GitHubApp(tk.Tk):
             self.load_pulls()
         elif idx == 4:
             self.load_notifications()
+        elif idx == 5:
+            self.load_starred()
+        elif idx == 6:
+            self.gist_tab.load()
 
     def _delete_selected(self, _e):
         focused = self.focus_get()
@@ -556,8 +583,12 @@ class GitHubApp(tk.Tk):
         self.cfg.theme = r["theme"]
         self.cfg.poll_interval = r["poll_interval"]
         self.cfg.font_size = r.get("font_size", 10)
+        self.cfg.update_repo = r.get("update_repo", "")
+        self.cfg.update_channel = r.get("update_channel", "stable")
+        self.cfg.auto_check_update = bool(r.get("auto_check_update", True))
         self.cfg.save()
         if self.api:
+            self.api.proxy = self.cfg.proxy
             self.api.s.proxies = ({"http": self.cfg.proxy, "https": self.cfg.proxy} if self.cfg.proxy else {})
         self._setup_theme(self._resolve_theme(self.cfg.theme))
         for tree in self._iter_trees(self):
@@ -590,6 +621,56 @@ class GitHubApp(tk.Tk):
 
         self.run_async(work, ok, err)
 
+    # ---------- 自动更新 ----------
+    def check_update(self, manual=False):
+        repo = (self.cfg.update_repo or "").strip()
+        if not repo:
+            if manual:
+                messagebox.showinfo(
+                    "检查更新",
+                    "尚未配置更新源仓库。\n\n"
+                    "请在「设置 → 自动更新」中填写一个 GitHub 仓库（owner/repo），\n"
+                    "该仓库的 Release 将作为更新来源。",
+                    parent=self)
+            return
+        if not self.api:
+            if manual:
+                messagebox.showinfo("检查更新", "请先登录", parent=self)
+            return
+        if manual:
+            self._status("正在检查更新…")
+        include_pre = (self.cfg.update_channel or "stable") != "stable"
+
+        def work():
+            return updater.check_for_update(
+                self.api, repo, APP_VERSION, include_prerelease=include_pre)
+
+        def ok(info):
+            if info is None:
+                if manual:
+                    self._status("已是最新版本")
+                    messagebox.showinfo(
+                        "检查更新",
+                        f"当前已是最新版本（v{APP_VERSION}）",
+                        parent=self)
+                return
+            if not manual and info.version == (self.cfg.skipped_version or ""):
+                return
+            self._status(f"发现新版本 v{info.version}")
+            try:
+                UpdateDialog(self, info, self.api, repo)
+            except Exception:
+                logging.exception("无法打开更新对话框")
+
+        def err(e):
+            if manual:
+                self._status("检查更新失败")
+                self._err(e)
+            else:
+                logging.warning("自动检查更新失败：%s", e)
+
+        self.run_async(work, ok, err)
+
     # ---------- 登录 ----------
     def _build_login(self):
         outer = ttk.Frame(self)
@@ -599,7 +680,6 @@ class GitHubApp(tk.Tk):
         center = ttk.Frame(outer)
         center.place(relx=0.5, rely=0.46, anchor="center")
 
-        # 修复：如果本地有 tubiao/logo.png 则加载高清图，否则回退到 Emoji
         logo_path = os.path.join(get_base_dir(), "tubiao", "logo.png")
         if os.path.exists(logo_path):
             try:
@@ -616,8 +696,8 @@ class GitHubApp(tk.Tk):
             ttk.Label(center, text="🐙", font=(self.ui_font, 64)).pack()
 
         ttk.Label(center, text="GitHub 桌面客户端", style="Title.TLabel").pack(pady=(8, 4))
-        ttk.Label(center, text="使用 Personal Access Token 或 OAuth Device Flow 登录", style="Subtitle.TLabel").pack(
-            pady=(0, 22))
+        ttk.Label(center, text=f"v{APP_VERSION}  ·  使用 Personal Access Token 或 OAuth Device Flow 登录",
+                  style="Subtitle.TLabel").pack(pady=(0, 22))
 
         border = tk.Frame(center, bg=self.colors["CARD_BORDER"])
         border.pack()
@@ -739,6 +819,16 @@ class GitHubApp(tk.Tk):
             self.load_repos(reset=True)
             self._schedule_poll()
 
+            # 自动检查更新（同一会话仅触发一次）
+            if (self.cfg.auto_check_update
+                    and (self.cfg.update_repo or "").strip()
+                    and not self._update_check_launched):
+                self._update_check_launched = True
+                try:
+                    self.after(5000, lambda: self.check_update(manual=False))
+                except Exception:
+                    pass
+
         def err(e):
             msg = str(e)
             if "401" in msg:
@@ -771,6 +861,7 @@ class GitHubApp(tk.Tk):
         self._repo_cache.clear()
         self._labels_cache.clear()
         self.issue_nodes.clear()
+        self._update_check_launched = False
         self.main_frame.pack_forget()
         self.login_frame.pack(fill="both", expand=True)
         self.status.configure(text="", style="Danger.TLabel")
@@ -811,6 +902,8 @@ class GitHubApp(tk.Tk):
         ttk.Button(header, text="⌨️", command=self._show_shortcuts).pack(side="right", padx=(4, 0))
         ttk.Button(header, text="👤 切换账号", command=self._switch_account).pack(side="right", padx=(4, 0))
         ttk.Button(header, text="⚙️ 设置", command=self._open_settings).pack(side="right", padx=(4, 0))
+        ttk.Button(header, text="⬆️ 检查更新",
+                   command=lambda: self.check_update(manual=True)).pack(side="right", padx=(4, 0))
         ttk.Button(header, text="退出登录", command=self.logout).pack(side="right", padx=(4, 0))
         ttk.Button(header, text="🔄 刷新", command=self._refresh_current).pack(side="right", padx=(4, 0))
         ttk.Separator(mf, orient="horizontal").pack(fill="x")
@@ -1162,12 +1255,16 @@ class GitHubApp(tk.Tk):
 
         def work():
             # 仓库不存在则创建（auto_init=False 避免空仓库冲突）
+            # 只把 404 当“不存在”，其余错误（网络 / 限流 / 权限）原样抛出
             exists = False
             try:
                 self.api.get_repo(full)
                 exists = True
-            except RuntimeError:
-                exists = False
+            except RuntimeError as e:
+                if "HTTP 404" in str(e):
+                    exists = False
+                else:
+                    raise
             if not exists:
                 self.api.create_repo(
                     r["name"], description=r["description"],
@@ -1212,7 +1309,8 @@ class GitHubApp(tk.Tk):
             ttk.Radiobutton(sbar, text=txt, variable=self.search_mode, value=val, command=self._on_search_typing).pack(
                 side="left", padx=(0, 6))
 
-        self.search_entry = ttk.Entry(sbar, width=48)
+        # Combobox 而非 Entry：支持下拉历史
+        self.search_entry = ttk.Combobox(sbar, width=48)
         self.search_entry.pack(side="left", padx=(6, 6))
         self.search_entry.bind("<Return>", lambda _e: self.do_search())
         self.search_entry.bind("<KeyRelease>", self._on_search_typing)
@@ -1371,7 +1469,16 @@ class GitHubApp(tk.Tk):
         ttk.Label(sbar, text="指派者：").pack(side="left", padx=(10, 0))
         self.issue_assignee_var = tk.StringVar()
         ttk.Entry(sbar, textvariable=self.issue_assignee_var, width=12).pack(side="left")
-        self.issue_assignee_var.trace_add("write", lambda *_: self._reload_issues())
+
+        def _on_assignee_change(*_):
+            if self._assignee_after:
+                try:
+                    self.after_cancel(self._assignee_after)
+                except Exception:
+                    pass
+            self._assignee_after = self.after(500, self._reload_issues)
+
+        self.issue_assignee_var.trace_add("write", _on_assignee_change)
 
         ttk.Button(sbar, text="⬇️ 下一页", command=lambda: self.load_issues(next_page=True)).pack(side="right")
 
@@ -1767,6 +1874,7 @@ class GitHubApp(tk.Tk):
 
         def ok(items):
             if gen != self._gen_notifs: return
+            items = items or []
             for iid in self.notify_tree.get_children():
                 if str(iid).startswith("__state__"): self.notify_tree.delete(iid)
             self._notif_map.clear()
@@ -1834,6 +1942,7 @@ class GitHubApp(tk.Tk):
 
         def ok(items):
             if gen != self._gen_star: return
+            items = items or []
             for iid in self.star_tree.get_children():
                 if str(iid).startswith("__state__"): self.star_tree.delete(iid)
 
@@ -1876,18 +1985,7 @@ class GitHubApp(tk.Tk):
         if not REPO_RE.match(repo):
             messagebox.showinfo("提示", "请选择一个仓库")
             return
-        self.cfg.add_recent_repo(repo)
-        self._refresh_repo_switch()
-        cached = self._repo_cache.get(repo)
-        if cached and "owner" in cached:
-            RepoDetailWindow(self, repo, cached)
-            return
-
-        def ok(data):
-            self._repo_cache[repo] = data
-            RepoDetailWindow(self, repo, data)
-
-        self.run_async(lambda: self.api.get_repo(repo), ok)
+        self._open_repo_detail(repo)
 
     def _open_repo_detail(self, repo):
         self.cfg.add_recent_repo(repo)
@@ -2041,6 +2139,7 @@ class GitHubApp(tk.Tk):
         if not self.api: return
 
         def ok(items):
+            items = items or []
             items = [n for n in items if n["repository"]["full_name"] not in self.cfg.muted_repos]
             unread = sum(1 for n in items if n.get("unread") is not False)
             self._update_tray_badge(unread)

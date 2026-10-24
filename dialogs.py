@@ -6,8 +6,24 @@ import re
 from tkinter import ttk, messagebox, filedialog
 
 from oauth import DeviceFlow
+from utils import _fmt_bytes
+from version import __version__ as APP_VERSION
+import updater
 
 REPO_NAME_RE = re.compile(r"^[\w.-]{1,100}$")
+
+
+def _resolve_fonts(parent):
+    """从 parent（GitHubApp / Toplevel）或 parent.app 中获取字体与主题色。"""
+    ui = getattr(parent, "ui_font", None) \
+        or getattr(getattr(parent, "app", None), "ui_font", "TkDefaultFont")
+    mono = getattr(parent, "mono_font", None) \
+        or getattr(getattr(parent, "app", None), "mono_font", "TkFixedFont")
+    colors = getattr(parent, "colors", None) \
+        or getattr(getattr(parent, "app", None), "colors", {}) or {}
+    icon = getattr(parent, "icon_path", None) \
+        or getattr(getattr(parent, "app", None), "icon_path", None)
+    return ui, mono, colors, icon
 
 
 class IssueDialog(tk.Toplevel):
@@ -23,17 +39,21 @@ class IssueDialog(tk.Toplevel):
         self.minsize(560, 460)
         self._labels = available_labels or []
         self._initial_labels = set(current_labels or [])
-        mono = getattr(parent, "mono_font", "TkFixedFont")
-        colors = getattr(parent, "colors", {})
 
-        try:
-            self.iconbitmap(parent.icon_path)
-        except Exception:
-            pass
+        ui_font, mono, colors, icon_path = _resolve_fonts(parent)
+        self.ui_font = ui_font
+        self.mono_font = mono
+        self.colors = colors
+
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
 
         f = ttk.Frame(self, padding=18)
         f.pack(fill="both", expand=True)
-        ttk.Label(f, text="标题", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="标题", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.title_var = tk.StringVar(value=initial_title)
         e = ttk.Entry(f, textvariable=self.title_var)
         e.pack(fill="x", pady=(4, 12))
@@ -48,7 +68,7 @@ class IssueDialog(tk.Toplevel):
 
         if self._labels:
             ttk.Label(f, text="标签（Ctrl 多选）",
-                      font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+                      font=(ui_font, 10, "bold")).pack(anchor="w")
             wrap = ttk.Frame(f)
             wrap.pack(fill="x", pady=(4, 12))
             self.label_list = tk.Listbox(
@@ -63,7 +83,6 @@ class IssueDialog(tk.Toplevel):
                     self.label_list.selection_set("end")
             self.label_list.pack(side="left", fill="x", expand=True)
 
-        # 编辑与预览 tab
         nb = ttk.Notebook(f)
         nb.pack(fill="both", expand=True)
 
@@ -84,7 +103,7 @@ class IssueDialog(tk.Toplevel):
         nb.add(tab_prev, text="👁 预览")
         self.preview_text = tk.Text(
             tab_prev, wrap="word", height=10, relief="solid", bd=1,
-            font=(parent.ui_font, 10), state="disabled",
+            font=(ui_font, 10), state="disabled",
             bg=colors.get("ENTRY_BG", "#fff"), fg=colors.get("FG", "#000"),
             padx=8, pady=8)
         self.preview_text.pack(fill="both", expand=True)
@@ -117,9 +136,8 @@ class IssueDialog(tk.Toplevel):
         txt = self.body_text.get("1.0", "end-1c")
         self.preview_text.configure(state="normal")
         self.preview_text.delete("1.0", "end")
-        self.preview_text.tag_configure("b", font=(
-        self.ui_font if hasattr(self, 'ui_font') else "TkDefaultFont", 10, "bold"))
-        self.preview_text.tag_configure("code", font=("Consolas", 10), background="#f0f0f0")
+        self.preview_text.tag_configure("b", font=(self.ui_font, 10, "bold"))
+        self.preview_text.tag_configure("code", font=(self.mono_font, 10))
 
         # 极简 Markdown 渲染
         lines = txt.split("\n")
@@ -131,7 +149,6 @@ class IssueDialog(tk.Toplevel):
             if in_code:
                 self.preview_text.insert("end", line + "\n", "code")
             else:
-                # 简易加粗替换
                 parts = re.split(r"(\*\*.*?\*\*)", line)
                 for p in parts:
                     if p.startswith("**") and p.endswith("**"):
@@ -167,20 +184,24 @@ class CreateRepoDialog(tk.Toplevel):
         self.grab_set()
         self.geometry("540x400")
         self.resizable(False, False)
-        try:
-            self.iconbitmap(parent.icon_path)
-        except Exception:
-            pass
+
+        ui_font, _mono, _colors, icon_path = _resolve_fonts(parent)
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
+
         f = ttk.Frame(self, padding=18)
         f.pack(fill="both", expand=True)
-        ttk.Label(f, text="仓库名称 *", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="仓库名称 *", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.name_var = tk.StringVar()
         e = ttk.Entry(f, textvariable=self.name_var)
         e.pack(fill="x", pady=(4, 4))
         e.focus_set()
         ttk.Label(f, text="字母、数字、.、-、_，最长 100 字符",
                   style="Hint.TLabel").pack(anchor="w")
-        ttk.Label(f, text="描述", font=(parent.ui_font, 10, "bold")).pack(anchor="w", pady=(14, 0))
+        ttk.Label(f, text="描述", font=(ui_font, 10, "bold")).pack(anchor="w", pady=(14, 0))
         self.desc_var = tk.StringVar()
         ttk.Entry(f, textvariable=self.desc_var).pack(fill="x", pady=(4, 12))
         self.private_var = tk.BooleanVar()
@@ -215,23 +236,27 @@ class EditRepoDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.geometry("560x440")
-        try:
-            self.iconbitmap(parent.icon_path)
-        except Exception:
-            pass
+
+        ui_font, _mono, _colors, icon_path = _resolve_fonts(parent)
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
+
         f = ttk.Frame(self, padding=18)
         f.pack(fill="both", expand=True)
 
-        ttk.Label(f, text="描述", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="描述", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.desc_var = tk.StringVar(value=repo_data.get("description") or "")
         ttk.Entry(f, textvariable=self.desc_var).pack(fill="x", pady=(4, 12))
 
-        ttk.Label(f, text="主页", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="主页", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.home_var = tk.StringVar(value=repo_data.get("homepage") or "")
         ttk.Entry(f, textvariable=self.home_var).pack(fill="x", pady=(4, 12))
 
         ttk.Label(f, text="Topics（逗号分隔）",
-                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+                  font=(ui_font, 10, "bold")).pack(anchor="w")
         self.topics_var = tk.StringVar(
             value=", ".join(repo_data.get("topics") or []))
         ttk.Entry(f, textvariable=self.topics_var).pack(fill="x", pady=(4, 12))
@@ -268,14 +293,19 @@ class CommentDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.geometry("620x400")
-        colors = getattr(parent, "colors", {})
-        try:
-            self.iconbitmap(parent.icon_path)
-        except Exception:
-            pass
+        colors = getattr(parent, "colors", None) \
+            or getattr(getattr(parent, "app", None), "colors", {}) or {}
+        mono = getattr(parent, "mono_font", None) \
+            or getattr(getattr(parent, "app", None), "mono_font", "TkFixedFont")
+        icon_path = getattr(parent, "icon_path", None) \
+            or getattr(getattr(parent, "app", None), "icon_path", None)
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
         f = ttk.Frame(self, padding=14)
         f.pack(fill="both", expand=True)
-        mono = getattr(parent, "mono_font", "TkFixedFont")
         self.text = tk.Text(f, wrap="word", font=(mono, 10), undo=True,
                             relief="solid", bd=1,
                             bg=colors.get("ENTRY_BG", "#fff"),
@@ -307,18 +337,40 @@ class SettingsDialog(tk.Toplevel):
         self.cfg = cfg
         self.transient(parent)
         self.grab_set()
-        self.geometry("600x600")
+        self.geometry("620x820")
+        self.minsize(560, 700)
 
-        try:
-            self.iconbitmap(parent.icon_path)
-        except Exception:
-            pass
+        ui_font, _mono, _colors, icon_path = _resolve_fonts(parent)
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
 
-        f = ttk.Frame(self, padding=18)
-        f.pack(fill="both", expand=True)
+        # 内容区（可滚动）
+        outer = ttk.Frame(self)
+        outer.pack(fill="both", expand=True)
+        canvas = tk.Canvas(outer, borderwidth=0, highlightthickness=0)
+        vsb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
 
+        f = ttk.Frame(canvas, padding=18)
+        win_id = canvas.create_window((0, 0), window=f, anchor="nw")
+
+        def _on_frame_config(_e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_config(e):
+            canvas.itemconfigure(win_id, width=e.width)
+
+        f.bind("<Configure>", _on_frame_config)
+        canvas.bind("<Configure>", _on_canvas_config)
+
+        # ---- 代理 ----
         ttk.Label(f, text="HTTP / HTTPS 代理（留空直连）",
-                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+                  font=(ui_font, 10, "bold")).pack(anchor="w")
         self.proxy_var = tk.StringVar(value=cfg.proxy)
         row_p = ttk.Frame(f)
         row_p.pack(fill="x", pady=(4, 4))
@@ -329,12 +381,14 @@ class SettingsDialog(tk.Toplevel):
         self.proxy_status = ttk.Label(f, text="", style="Hint.TLabel")
         self.proxy_status.pack(anchor="w", pady=(0, 12))
 
+        # ---- OAuth ----
         ttk.Label(f, text="OAuth App Client ID",
-                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+                  font=(ui_font, 10, "bold")).pack(anchor="w")
         self.oauth_var = tk.StringVar(value=cfg.oauth_client_id)
         ttk.Entry(f, textvariable=self.oauth_var).pack(fill="x", pady=(4, 12))
 
-        ttk.Label(f, text="主题", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        # ---- 主题 ----
+        ttk.Label(f, text="主题", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.theme_var = tk.StringVar(value=cfg.theme)
         t_row = ttk.Frame(f)
         t_row.pack(anchor="w", pady=(4, 12))
@@ -342,23 +396,50 @@ class SettingsDialog(tk.Toplevel):
             ttk.Radiobutton(t_row, text=txt, variable=self.theme_var,
                             value=val).pack(side="left", padx=(0, 12))
 
-        # 字号
-        ttk.Label(f, text="界面字号大小", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        # ---- 字号 ----
+        ttk.Label(f, text="界面字号大小", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.font_var = tk.IntVar(value=getattr(cfg, "font_size", 10))
         ttk.Spinbox(f, from_=8, to=16, textvariable=self.font_var, width=10).pack(anchor="w", pady=(4, 12))
 
-        # 轮询
+        # ---- 轮询 ----
         ttk.Label(f, text="通知轮询间隔（秒，0 关闭）",
-                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+                  font=(ui_font, 10, "bold")).pack(anchor="w")
         self.poll_var = tk.IntVar(value=cfg.poll_interval)
         ttk.Spinbox(f, from_=0, to=3600, increment=30,
                     textvariable=self.poll_var, width=10).pack(anchor="w", pady=(4, 12))
 
-        bar = ttk.Frame(f)
-        bar.pack(fill="x", side="bottom", pady=(14, 0))
+        # ---- 自动更新 ----
+        ttk.Separator(f, orient="horizontal").pack(fill="x", pady=(6, 10))
+        ttk.Label(f, text="自动更新", font=(ui_font, 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="更新源仓库（owner/repo，留空禁用自动检查）",
+                  style="Hint.TLabel").pack(anchor="w")
+        self.update_repo_var = tk.StringVar(value=cfg.update_repo)
+        ttk.Entry(f, textvariable=self.update_repo_var).pack(fill="x", pady=(2, 8))
+
+        row_u = ttk.Frame(f)
+        row_u.pack(fill="x", pady=(0, 6))
+        ttk.Label(row_u, text="通道：").pack(side="left")
+        self.update_channel_var = tk.StringVar(value=cfg.update_channel)
+        ttk.Radiobutton(row_u, text="稳定版", variable=self.update_channel_var,
+                        value="stable").pack(side="left", padx=(0, 10))
+        ttk.Radiobutton(row_u, text="测试版", variable=self.update_channel_var,
+                        value="beta").pack(side="left")
+
+        self.auto_check_var = tk.BooleanVar(value=cfg.auto_check_update)
+        ttk.Checkbutton(f, text="启动时自动检查更新",
+                        variable=self.auto_check_var).pack(anchor="w")
+
+        ttk.Label(f, text=f"当前版本：v{APP_VERSION}",
+                  style="Hint.TLabel").pack(anchor="w", pady=(8, 0))
+
+        # ---- 底部按钮 ----
+        bar = ttk.Frame(self, padding=(18, 10))
+        bar.pack(fill="x", side="bottom")
         ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
         ttk.Button(bar, text="保存", style="Accent.TButton",
                    command=self._save).pack(side="right", padx=(0, 8))
+
+        self.bind("<Escape>", lambda _e: self.destroy())
 
     def _test_proxy(self):
         self.test_btn.configure(state="disabled")
@@ -400,6 +481,9 @@ class SettingsDialog(tk.Toplevel):
             "theme": self.theme_var.get(),
             "poll_interval": poll,
             "font_size": font_size,
+            "update_repo": self.update_repo_var.get().strip(),
+            "update_channel": self.update_channel_var.get() or "stable",
+            "auto_check_update": bool(self.auto_check_var.get()),
         }
         self.destroy()
 
@@ -412,29 +496,31 @@ class CreatePRDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.geometry("600x520")
-        try:
-            self.iconbitmap(parent.icon_path)
-        except Exception:
-            pass
+
+        ui_font, mono, _colors, icon_path = _resolve_fonts(parent)
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
         f = ttk.Frame(self, padding=18)
         f.pack(fill="both", expand=True)
 
-        ttk.Label(f, text="来源分支 (head)", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="来源分支 (head)", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.head_var = tk.StringVar()
         ttk.Combobox(f, textvariable=self.head_var, values=branches).pack(fill="x", pady=(4, 12))
 
-        ttk.Label(f, text="目标分支 (base)", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="目标分支 (base)", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.base_var = tk.StringVar()
         ttk.Combobox(f, textvariable=self.base_var, values=branches).pack(fill="x", pady=(4, 12))
 
-        ttk.Label(f, text="标题 *", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="标题 *", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.title_var = tk.StringVar()
         e = ttk.Entry(f, textvariable=self.title_var)
         e.pack(fill="x", pady=(4, 12))
         e.focus_set()
 
-        ttk.Label(f, text="描述", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
-        mono = getattr(parent, "mono_font", "TkFixedFont")
+        ttk.Label(f, text="描述", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.body_text = tk.Text(f, wrap="word", height=8, font=(mono, 10), undo=True)
         self.body_text.pack(fill="both", expand=True, pady=(4, 12))
 
@@ -469,23 +555,25 @@ class CreateReleaseDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.geometry("600x520")
-        try:
-            self.iconbitmap(parent.icon_path)
-        except Exception:
-            pass
+
+        ui_font, mono, _colors, icon_path = _resolve_fonts(parent)
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
         f = ttk.Frame(self, padding=18)
         f.pack(fill="both", expand=True)
 
-        ttk.Label(f, text="标签 (Tag) *", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="标签 (Tag) *", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.tag_var = tk.StringVar()
         ttk.Entry(f, textvariable=self.tag_var).pack(fill="x", pady=(4, 12))
 
-        ttk.Label(f, text="标题", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="标题", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.name_var = tk.StringVar()
         ttk.Entry(f, textvariable=self.name_var).pack(fill="x", pady=(4, 12))
 
-        ttk.Label(f, text="说明", font=(parent.ui_font, 10, "bold")).pack(anchor="w")
-        mono = getattr(parent, "mono_font", "TkFixedFont")
+        ttk.Label(f, text="说明", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.body_text = tk.Text(f, wrap="word", height=8, font=(mono, 10), undo=True)
         self.body_text.pack(fill="both", expand=True, pady=(4, 12))
 
@@ -525,27 +613,31 @@ class OAuthDialog(tk.Toplevel):
         self._cancel = False
         self._info = None
         self._verification_url = ""
+        self._gen = 0           # 代次号：用于让旧轮询线程自动退出
         self.transient(parent)
         self.grab_set()
         self.geometry("520x360")
-        try:
-            self.iconbitmap(parent.icon_path)
-        except Exception:
-            pass
+
+        ui_font, mono, colors, icon_path = _resolve_fonts(parent)
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
         self.flow = DeviceFlow(client_id, proxy=proxy)
 
         f = ttk.Frame(self, padding=20)
         f.pack(fill="both", expand=True)
         ttk.Label(f, text="🔐 通过 GitHub 授权登录",
-                  font=(parent.ui_font, 14, "bold")).pack(pady=(0, 10))
+                  font=(ui_font, 14, "bold")).pack(pady=(0, 10))
         self.hint = ttk.Label(f, text="正在请求授权码…", style="Hint.TLabel",
                               wraplength=460, justify="center")
         self.hint.pack(pady=(0, 14))
         self.code_var = tk.StringVar(value="")
         self.code_label = ttk.Label(f, textvariable=self.code_var,
-                                    font=(parent.mono_font, 22, "bold"))
+                                    font=(mono, 22, "bold"))
         self.code_label.pack(pady=(0, 14))
-        self.link = ttk.Label(f, text="", foreground=parent.colors.get("ACCENT", "#0969da"),
+        self.link = ttk.Label(f, text="", foreground=colors.get("ACCENT", "#0969da"),
                               cursor="hand2")
         self.link.pack(pady=(0, 14))
         self.link.bind("<Button-1>", lambda _e: self._open_link())
@@ -575,11 +667,13 @@ class OAuthDialog(tk.Toplevel):
             webbrowser.open(self._verification_url)
 
     def _start(self):
+        gen = self._gen
+
         def work():
             return self.flow.start()
 
         def ok(info):
-            if self._cancel:
+            if self._cancel or gen != self._gen:
                 return
             self._info = info
             self._verification_url = info.get("verification_uri", "")
@@ -587,17 +681,21 @@ class OAuthDialog(tk.Toplevel):
             self._safe_call(lambda: self.hint.configure(text="请访问下方链接，输入授权码："))
             self._safe_call(lambda: self.link.configure(text=self._verification_url))
             self._safe_call(lambda: self.status.configure(text="等待浏览器授权…"))
-            self._poll_thread()
+            self._poll_thread(gen)
 
         def err(e):
+            if gen != self._gen:
+                return
             self._safe_call(lambda: self.status.configure(
                 text=f"启动失败：{e}", style="Danger.TLabel"))
 
         self.app.run_async(work, ok, err)
 
-    def _poll_thread(self):
+    def _poll_thread(self, gen):
         def worker():
             def ui(fn):
+                if gen != self._gen or self._cancel:
+                    return
                 try:
                     self.after(0, fn)
                 except tk.TclError:
@@ -608,7 +706,7 @@ class OAuthDialog(tk.Toplevel):
                     self._info,
                     on_tick=lambda s: ui(lambda sec=s: self._safe_call(
                         lambda: self.status.configure(text=f"等待授权… 剩余 {sec}s"))),
-                    cancel_flag=lambda: self._cancel,
+                    cancel_flag=lambda: self._cancel or gen != self._gen,
                 )
                 ui(lambda: self._safe_call(lambda: self._success(tok)))
             except Exception as e:
@@ -633,15 +731,20 @@ class OAuthDialog(tk.Toplevel):
 
     def _on_cancel(self):
         self._cancel = True
+        self._gen += 1
         try:
             self.destroy()
         except tk.TclError:
             pass
 
     def _restart(self):
+        # 旧线程因代次不匹配自动退出
+        self._gen += 1
         self._cancel = False
         self._safe_call(lambda: self.code_var.set(""))
         self._safe_call(lambda: self.link.configure(text=""))
+        self._safe_call(lambda: self.status.configure(text="", style="Hint.TLabel"))
+        self._safe_call(lambda: self.hint.configure(text="正在请求授权码…"))
         self._start()
 
 
@@ -656,16 +759,19 @@ class UploadProjectDialog(tk.Toplevel):
         self.grab_set()
         self.geometry("660x580")
         self.resizable(False, False)
-        try:
-            self.iconbitmap(parent.icon_path)
-        except Exception:
-            pass
+
+        ui_font, _mono, _colors, icon_path = _resolve_fonts(parent)
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
 
         f = ttk.Frame(self, padding=18)
         f.pack(fill="both", expand=True)
 
         ttk.Label(f, text="本地目录 *",
-                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+                  font=(ui_font, 10, "bold")).pack(anchor="w")
         row = ttk.Frame(f)
         row.pack(fill="x", pady=(4, 12))
         self.dir_var = tk.StringVar(value=default_dir)
@@ -675,12 +781,12 @@ class UploadProjectDialog(tk.Toplevel):
             side="left", padx=(6, 0))
 
         ttk.Label(f, text="仓库名称 *",
-                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+                  font=(ui_font, 10, "bold")).pack(anchor="w")
         self.name_var = tk.StringVar()
         ttk.Entry(f, textvariable=self.name_var).pack(fill="x", pady=(4, 12))
 
         ttk.Label(f, text="描述",
-                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+                  font=(ui_font, 10, "bold")).pack(anchor="w")
         self.desc_var = tk.StringVar()
         ttk.Entry(f, textvariable=self.desc_var).pack(fill="x", pady=(4, 12))
 
@@ -694,12 +800,12 @@ class UploadProjectDialog(tk.Toplevel):
                         variable=self.ignore_var).pack(side="left", padx=(16, 0))
 
         ttk.Label(f, text="分支名",
-                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+                  font=(ui_font, 10, "bold")).pack(anchor="w")
         self.branch_var = tk.StringVar(value="main")
         ttk.Entry(f, textvariable=self.branch_var).pack(fill="x", pady=(4, 12))
 
         ttk.Label(f, text="首次提交信息",
-                  font=(parent.ui_font, 10, "bold")).pack(anchor="w")
+                  font=(ui_font, 10, "bold")).pack(anchor="w")
         self.msg_var = tk.StringVar(value="Initial commit")
         ttk.Entry(f, textvariable=self.msg_var).pack(fill="x", pady=(4, 12))
 
@@ -758,3 +864,188 @@ class UploadProjectDialog(tk.Toplevel):
             "add_gitignore": self.ignore_var.get(),
         }
         self.destroy()
+
+
+class UpdateDialog(tk.Toplevel):
+    """发现新版本时的对话框：展示 release notes、下载安装包、一键安装。"""
+
+    def __init__(self, parent, release_info, api, repo):
+        super().__init__(parent)
+        self.app = getattr(parent, "app", parent) or parent
+        self.info = release_info
+        self.api = api
+        self.repo = repo
+        self._downloaded = None
+
+        # 优先选稳定资产；若无，再放宽到 prerelease 资产
+        self._asset = updater.pick_asset(self.info.assets, channel="stable") \
+            or updater.pick_asset(self.info.assets, channel="beta")
+
+        self.title("发现新版本")
+        self.geometry("680x600")
+        self.minsize(560, 480)
+        self.transient(parent)
+        self.grab_set()
+
+        ui_font, mono_font, colors, icon_path = _resolve_fonts(parent)
+        self.ui_font = ui_font
+        self.mono_font = mono_font
+        self.colors = colors
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
+
+        f = ttk.Frame(self, padding=16)
+        f.pack(fill="both", expand=True)
+
+        head = ttk.Frame(f)
+        head.pack(fill="x", pady=(0, 8))
+        ttk.Label(head, text=f"🎉 发现新版本 v{self.info.version}",
+                  font=(ui_font, 15, "bold")).pack(anchor="w")
+        tag_line = "预发布版本" if self.info.prerelease else "稳定版本"
+        ttk.Label(
+            head,
+            text=(f"当前版本 v{APP_VERSION}    →    最新版本 v{self.info.version}    ·    {tag_line}\n"
+                  f"发布时间：{(self.info.published_at or '')[:10] or '—'}"),
+            style="Hint.TLabel", justify="left",
+        ).pack(anchor="w", pady=(4, 0))
+
+        ttk.Label(f, text="更新说明", font=(ui_font, 10, "bold")).pack(anchor="w", pady=(6, 4))
+        notes_wrap = ttk.Frame(f)
+        notes_wrap.pack(fill="both", expand=True, pady=(0, 10))
+        notes = tk.Text(
+            notes_wrap, wrap="word", height=12,
+            font=(mono_font, 9),
+            bg=colors.get("ENTRY_BG", "#fff"),
+            fg=colors.get("FG", "#000"),
+            relief="solid", bd=1, padx=8, pady=8,
+        )
+        vs = ttk.Scrollbar(notes_wrap, orient="vertical", command=notes.yview)
+        notes.configure(yscrollcommand=vs.set)
+        notes.pack(side="left", fill="both", expand=True)
+        vs.pack(side="right", fill="y")
+        notes.insert("1.0", self.info.body or "（无说明）")
+        notes.configure(state="disabled")
+
+        # 资产信息
+        asset_info = ttk.Frame(f)
+        asset_info.pack(fill="x", pady=(0, 6))
+        if self._asset:
+            size = _fmt_bytes(self._asset.get("size", 0))
+            ttk.Label(asset_info,
+                      text=f"📦 推荐文件：{self._asset.get('name', '?')}  ({size})"
+                      ).pack(anchor="w")
+        else:
+            ttk.Label(asset_info,
+                      text="⚠️ 该版本没有适配当前平台的可执行文件，可前往浏览器页面下载。",
+                      style="Danger.TLabel").pack(anchor="w")
+
+        self.progress = ttk.Progressbar(f, mode="determinate", maximum=100)
+
+        bar = ttk.Frame(f)
+        bar.pack(fill="x", pady=(12, 0))
+
+        self.primary_btn = ttk.Button(
+            bar,
+            text="下载并安装" if self._asset else "浏览器打开",
+            style="Accent.TButton",
+            command=self._on_primary,
+        )
+        self.primary_btn.pack(side="left")
+
+        ttk.Button(bar, text="浏览器打开",
+                   command=self._open_browser).pack(side="left", padx=(6, 0))
+
+        self.skip_btn = ttk.Button(bar, text="忽略此版本", command=self._skip)
+        self.skip_btn.pack(side="left", padx=(6, 0))
+
+        ttk.Button(bar, text="稍后提醒", command=self.destroy).pack(side="right")
+
+        self._bar = bar
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+    # ---- 行为 ----
+    def _open_browser(self):
+        if self.info.html_url:
+            webbrowser.open(self.info.html_url)
+
+    def _skip(self):
+        try:
+            self.app.cfg.skipped_version = self.info.version
+            self.app.cfg.save()
+            self.app._status(f"已忽略版本 v{self.info.version}")
+        except Exception:
+            pass
+        self.destroy()
+
+    def _on_primary(self):
+        if not self._asset:
+            self._open_browser()
+            return
+        if self._downloaded:
+            self._install_now(self._downloaded)
+            return
+        self._start_download()
+
+    def _install_now(self, path):
+        try:
+            updater.apply_update(path)
+            self.app._status("已启动安装程序")
+        except Exception as e:
+            messagebox.showerror("启动失败", str(e), parent=self)
+
+    def _start_download(self):
+        dest = filedialog.askdirectory(title="选择保存目录", parent=self)
+        if not dest:
+            return
+        self.primary_btn.configure(state="disabled", text="下载中…")
+        self.progress.configure(value=0)
+        if not self.progress.winfo_ismapped():
+            try:
+                self.progress.pack(fill="x", pady=(4, 0), before=self._bar)
+            except tk.TclError:
+                self.progress.pack(fill="x", pady=(4, 0))
+        asset = self._asset
+        self.app._status(f"正在下载 {asset.get('name')}…")
+
+        def work():
+            return self.api.download_asset(
+                self.repo, asset, dest,
+                on_progress=lambda p: self.app.after(
+                    0, lambda v=p: self._update_progress(v)),
+            )
+
+        def ok(path):
+            if not self.winfo_exists():
+                return
+            self._downloaded = path
+            self._update_progress(1.0)
+            self.primary_btn.configure(state="normal", text="立即安装")
+            self.app._status(f"下载完成：{path}")
+            if messagebox.askyesno(
+                    "下载完成",
+                    f"安装包已保存到：\n{path}\n\n是否立即启动安装程序？",
+                    parent=self):
+                self._install_now(path)
+
+        def err(e):
+            if not self.winfo_exists():
+                return
+            self.primary_btn.configure(state="normal",
+                                       text="下载并安装" if self._asset else "浏览器打开")
+            try:
+                self.progress.pack_forget()
+            except Exception:
+                pass
+            messagebox.showerror("下载失败", str(e), parent=self)
+
+        self.app.run_async(work, ok, err)
+
+    def _update_progress(self, p):
+        try:
+            if self.winfo_exists():
+                self.progress.configure(value=max(0, min(100, p * 100)))
+        except tk.TclError:
+            pass

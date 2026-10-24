@@ -132,7 +132,6 @@ class DownloadQueueWindow(tk.Toplevel):
             return
         try:
             self.tree.delete(*self.tree.get_children())
-            # 优化：使用锁获取快照，防止后台线程 append 导致索引错乱
             with self._lock:
                 tasks_snapshot = list(self.tasks)
 
@@ -161,12 +160,15 @@ class DownloadQueueWindow(tk.Toplevel):
             if not t:
                 time.sleep(0.4)
                 continue
-            t.status = "下载中"
-            t.error = ""
+
+            with self._lock:
+                t.status = "下载中"
+                t.error = ""
             self._schedule_refresh()
 
             def _prog(p, task=t):
-                task.progress = p
+                with self._lock:
+                    task.progress = p
                 self._schedule_refresh()
 
             try:
@@ -174,12 +176,14 @@ class DownloadQueueWindow(tk.Toplevel):
                     raise RuntimeError("未登录")
                 path = self.app.api.download_asset(
                     t.repo, t.asset, t.dest, on_progress=_prog)
-                t.status = "完成"
-                t.progress = 1.0
-                t.path = path
+                with self._lock:
+                    t.status = "完成"
+                    t.progress = 1.0
+                    t.path = path
             except Exception as e:
-                t.status = "失败"
-                t.error = str(e)[:100]
+                with self._lock:
+                    t.status = "失败"
+                    t.error = str(e)[:100]
             self._schedule_refresh()
 
     def _retry_failed(self):

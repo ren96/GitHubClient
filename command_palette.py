@@ -1,4 +1,5 @@
 # command_palette.py
+import logging
 import tkinter as tk
 from tkinter import ttk
 
@@ -59,13 +60,13 @@ class CommandPalette(tk.Toplevel):
     # ---- 构建候选条目 ----
     def _build_items(self):
         items = []
-        # 常用命令
         items.append(("🔄 刷新当前页", self.app._refresh_current))
         items.append(("🔍 搜索", self.app._focus_search))
         items.append(("➕ 新建仓库", self.app.create_repo))
         items.append(("🚀 上传项目", self.app.upload_project))
         items.append(("📝 新建 Issue", self.app.new_issue))
         items.append(("⚙️ 打开设置", self.app._open_settings))
+        items.append(("⬆️ 检查更新", lambda: self.app.check_update(manual=True)))
         items.append(("🌓 切换主题", self.app.toggle_theme))
         items.append(("👤 切换账号", self.app._switch_account))
         items.append(("📥 下载队列", self.app._show_download_queue))
@@ -73,14 +74,12 @@ class CommandPalette(tk.Toplevel):
         items.append(("🚪 退出登录", self.app.logout))
         items.append(("❌ 退出程序", self.app._quit))
 
-        # 跳转到标签页
         if hasattr(self.app, "nb"):
             for idx in range(self.app.nb.index("end")):
                 tab_text = self.app.nb.tab(idx, "text")
                 items.append((f"📑 切到 {tab_text}",
                               lambda i=idx: self.app.nb.select(i)))
 
-        # 最近打开的仓库（来自 repo_cache）
         for repo in list(self.repo_cache.keys())[:50]:
             items.append((f"📦 {repo}",
                           lambda r=repo: self.app._open_repo_detail(r)))
@@ -127,5 +126,5 @@ class CommandPalette(tk.Toplevel):
                 try:
                     cb()
                 except Exception:
-                    pass
+                    logging.exception("命令面板执行失败: %s", label)
                 return

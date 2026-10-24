@@ -14,6 +14,13 @@ class IssueDetailWindow(tk.Toplevel):
         self.title(f"{repo} #{number}")
         self.geometry("900x680")
         self.transient(app)
+
+        # 让子对话框（CommentDialog / IssueDialog）能继承字体 / 颜色 / 图标
+        self.ui_font = app.ui_font
+        self.mono_font = app.mono_font
+        self.colors = app.colors
+        self.icon_path = getattr(app, "icon_path", "")
+
         try:
             self.iconbitmap(app.icon_path)
         except Exception:
@@ -71,6 +78,8 @@ class IssueDetailWindow(tk.Toplevel):
 
     def reload(self):
         def ok(issue):
+            if not self.winfo_exists():
+                return
             self.issue = issue
             self.head.configure(text=f"#{self.number}  {issue['title']}")
             self.state_lbl.configure(
@@ -150,6 +159,8 @@ class IssueDetailWindow(tk.Toplevel):
             return
 
         def ok(_):
+            if not self.winfo_exists():
+                return
             self.app._status("评论已发送")
             self.reload()
 
@@ -175,14 +186,18 @@ class IssueDetailWindow(tk.Toplevel):
             self.wait_window(dlg)
             if not dlg.result:
                 return
-            fields = {"title": dlg.result["title"], "body": dlg.result["body"],
-                      "state": dlg.result["state"]}
-            if dlg.result["labels"]:
-                fields["labels"] = dlg.result["labels"]
-            if dlg.result["assignees"]:
-                fields["assignees"] = dlg.result["assignees"]
+            # 始终传 labels / assignees，允许清空
+            fields = {
+                "title": dlg.result["title"],
+                "body": dlg.result["body"],
+                "state": dlg.result["state"],
+                "labels": dlg.result["labels"],
+                "assignees": dlg.result["assignees"],
+            }
 
             def done(_):
+                if not self.winfo_exists():
+                    return
                 self.app._status(f"已更新 #{self.number}")
                 self.reload()
 
@@ -208,6 +223,9 @@ class IssueDetailWindow(tk.Toplevel):
         def done(_):
             self.app._status(f"已删除 #{self.number}")
             self.app._reload_issues()
-            self.destroy()
+            try:
+                self.destroy()
+            except tk.TclError:
+                pass
 
         self.app.run_async(lambda: self.app.api.delete_issue(node_id), done)

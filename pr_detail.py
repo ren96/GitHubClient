@@ -102,6 +102,8 @@ class PRDetailWindow(tk.Toplevel):
 
     def reload(self):
         def ok(pr):
+            if not self.winfo_exists():
+                return
             self.pr = pr
             self.head.configure(text=f"#{self.number}  {pr['title']}")
             body = (f"作者：{pr['user']['login']}\n"
@@ -118,6 +120,8 @@ class PRDetailWindow(tk.Toplevel):
         self.app.run_async(lambda: self.app.api.get_pull(self.repo, self.number), ok)
 
         def ok_files(items):
+            if not self.winfo_exists():
+                return
             self.files_tree.delete(*self.files_tree.get_children())
             for i, f in enumerate(items):
                 self.files_tree.insert("", "end", values=(
@@ -130,6 +134,8 @@ class PRDetailWindow(tk.Toplevel):
 
         def ok_diff(text):
             try:
+                if not self.winfo_exists():
+                    return
                 self.diff_txt.configure(state="normal")
                 self.diff_txt.delete("1.0", "end")
                 for line in (text or "").splitlines():
@@ -156,6 +162,8 @@ class PRDetailWindow(tk.Toplevel):
             return
 
         def ok(_):
+            if not self.winfo_exists():
+                return
             self.app._status(f"已提交 review: {event}")
 
         self.app.run_async(
@@ -167,6 +175,8 @@ class PRDetailWindow(tk.Toplevel):
             return
 
         def ok(res):
+            if not self.winfo_exists():
+                return
             self.app._status(f"合并结果：{res.get('merged')}")
             self.reload()
 
@@ -178,6 +188,8 @@ class PRDetailWindow(tk.Toplevel):
             return
 
         def ok(_):
+            if not self.winfo_exists():
+                return
             self.app._status("已关闭")
             self.reload()
 

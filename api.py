@@ -126,6 +126,8 @@ class GitHubAPI:
         try:
             return self._req("GET", f"/repos/{repo}/contributors",
                              params={"per_page": per_page}, use_etag=True)
+        except RateLimitError:
+            raise
         except RuntimeError:
             return []
 
@@ -154,6 +156,8 @@ class GitHubAPI:
         try:
             self._req("GET", f"/user/starred/{repo}")
             return True
+        except RateLimitError:
+            raise
         except RuntimeError:
             return False
 
@@ -225,6 +229,8 @@ class GitHubAPI:
         try:
             return self._req("GET", f"/repos/{repo}/labels",
                              params={"per_page": 100}, use_etag=True)
+        except RateLimitError:
+            raise
         except RuntimeError:
             return []
 
@@ -254,6 +260,8 @@ class GitHubAPI:
             if data.get("encoding") == "base64" and data.get("content"):
                 return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
             return ""
+        except RateLimitError:
+            raise
         except RuntimeError:
             return ""
 
@@ -517,12 +525,12 @@ class GitHubAPI:
         """构建纯净的 Git 运行环境，移除系统错误代理"""
         env = os.environ.copy()
         if self.proxy:
-            env["HTTP_PROXY"] = self.proxy
-            env["HTTPS_PROXY"] = self.proxy
-            env["http_proxy"] = self.proxy
-            env["https_proxy"] = self.proxy
+            for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+                env[k] = self.proxy
         else:
-            for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
+            for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+                      "ALL_PROXY", "all_proxy",
+                      "GIT_PROXY_COMMAND", "GIT_HTTP_PROXY", "GIT_HTTPS_PROXY"):
                 env.pop(k, None)
         return env
 
@@ -530,9 +538,8 @@ class GitHubAPI:
         """强制忽略系统代理配置"""
         if self.proxy:
             return ["-c", f"http.proxy={self.proxy}", "-c", f"https.proxy={self.proxy}"]
-        else:
-            # 修复：移除了非法的 env.http_proxy 和 env.https_proxy 配置项
-            return ["-c", "http.proxy=", "-c", "https.proxy=", "-c", "all.proxy="]
+        # 清除 git 层的代理
+        return ["-c", "http.proxy=", "-c", "https.proxy="]
 
     def clone_repo(self, repo, dest_dir, depth=1, on_progress=None):
         target = os.path.join(dest_dir, repo.split("/")[-1])
@@ -626,58 +633,68 @@ class GitHubAPI:
 
         # 3) 配置 origin（临时在 URL 中嵌入 Token，绕过 extraheader 的兼容性问题）
         auth_url = f"https://x-access-token:{self.token}@github.com/{repo}.git"
-        out, _ = _run(["remote"], check=False)
-        remotes = (out or "").split()
-        if "origin" in remotes:
-            _run(["remote", "set-url", "origin", auth_url])
-        else:
-            _run(["remote", "add", "origin", auth_url])
+        clean_url = f"https://github.com/{repo}.git"
 
-        # 4) 尝试合并远程已存在的提交（防止因 auto_init 导致历史冲突被拒）
-        _run(["pull", "origin", branch, "--allow-unrelated-histories", "--no-rebase"], check=False)
-
-        # 5) add & commit
-        _run(["add", "-A"])
-        status_out, _ = _run(["status", "--porcelain"], check=False)
-        has_changes = bool((status_out or "").strip())
-        has_commit = False
+        origin_set = False
         try:
-            h_out, _ = _run(["rev-parse", "--verify", "HEAD"], check=False)
-            has_commit = bool((h_out or "").strip())
-        except Exception:
+            out, _ = _run(["remote"], check=False)
+            remotes = (out or "").split()
+            if "origin" in remotes:
+                _run(["remote", "set-url", "origin", auth_url])
+            else:
+                _run(["remote", "add", "origin", auth_url])
+            origin_set = True
+
+            # 4) 尝试合并远程已存在的提交（防止因 auto_init 导致历史冲突被拒）
+            _run(["pull", "origin", branch, "--allow-unrelated-histories", "--no-rebase"], check=False)
+
+            # 5) add & commit
+            _run(["add", "-A"])
+            status_out, _ = _run(["status", "--porcelain"], check=False)
+            has_changes = bool((status_out or "").strip())
             has_commit = False
-        if has_changes or not has_commit:
-            _run(["commit", "-m", commit_message, "--allow-empty"])
-
-        # 6) push（流式输出，捕捉进度）
-        push_cmd = ["git"] + proxy_args + extra_cfg + ["-C", local_path, "push", "-u", "origin", branch]
-        if on_progress:
             try:
-                on_progress(-1, "正在推送…")
+                h_out, _ = _run(["rev-parse", "--verify", "HEAD"], check=False)
+                has_commit = bool((h_out or "").strip())
             except Exception:
-                pass
+                has_commit = False
+            if has_changes or not has_commit:
+                _run(["commit", "-m", commit_message, "--allow-empty"])
 
-        proc = subprocess.Popen(
-            push_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace", bufsize=1,
-            env=git_env)
-        assert proc.stdout is not None
-        output_lines = []
-        for line in proc.stdout:
-            output_lines.append(line)
-            if on_progress and line.strip():
+            # 5.1) 确保本地分支名与目标分支一致（兼容老版本 git init 默认 master 的情况）
+            ref_out, _ = _run(["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+            if (ref_out or "").strip() != branch:
+                _run(["branch", "-M", branch], check=False)
+
+            # 6) push（流式输出，捕捉进度）
+            push_cmd = ["git"] + proxy_args + extra_cfg + ["-C", local_path, "push", "-u", "origin", branch]
+            if on_progress:
                 try:
-                    on_progress(-1, line.strip())
+                    on_progress(-1, "正在推送…")
                 except Exception:
                     pass
-        proc.wait()
 
-        # 恢复不带 token 的 URL，防止本地 .git/config 泄露 token
-        _run(["remote", "set-url", "origin", f"https://github.com/{repo}.git"], check=False)
-
-        if proc.returncode != 0:
-            full_output = "".join(output_lines).strip()
-            raise RuntimeError(f"git push 失败（exit {proc.returncode}）：\n{full_output[:1000]}")
+            proc = subprocess.Popen(
+                push_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+                env=git_env)
+            assert proc.stdout is not None
+            output_lines = []
+            for line in proc.stdout:
+                output_lines.append(line)
+                if on_progress and line.strip():
+                    try:
+                        on_progress(-1, line.strip())
+                    except Exception:
+                        pass
+            proc.wait()
+            if proc.returncode != 0:
+                full_output = "".join(output_lines).strip()
+                raise RuntimeError(f"git push 失败（exit {proc.returncode}）：\n{full_output[:1000]}")
+        finally:
+            # 无论成功失败，都恢复不带 token 的 origin URL，防止泄露
+            if origin_set:
+                _run(["remote", "set-url", "origin", clean_url], check=False)
 
         if on_progress:
             try:

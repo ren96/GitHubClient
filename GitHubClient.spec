@@ -1,29 +1,55 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+
+from PyInstaller.utils.hooks import copy_metadata
 
 block_cipher = None
 
+# ---------- 数据文件 ----------
+_datas = []
+if os.path.exists('tubiao/tubiao.ico'):
+    _datas.append(('tubiao/tubiao.ico', 'tubiao'))
+if os.path.exists('tubiao/logo.png'):
+    _datas.append(('tubiao/logo.png', 'tubiao'))
+
+# 复制几个包的元数据（运行时可能通过 importlib.metadata 反查）
+for _pkg in ('keyring', 'markdown', 'pystray'):
+    try:
+        _datas += copy_metadata(_pkg)
+    except Exception:
+        pass
+
+# ---------- 隐式导入 ----------
+_hidden = [
+    # pystray 各平台后端
+    'pystray._win32',
+    'pystray._darwin',
+    'pystray._xorg',
+    # keyring 各平台后端
+    'keyring.backends.Windows',
+    'keyring.backends.macOS',
+    'keyring.backends.SecretService',
+    'keyring.backends.kwallet',
+    # Windows 凭据依赖
+    'win32ctypes.pywin32',
+    # markdown 扩展（repo_detail.py 动态传入字符串，静态分析扫不到）
+    'markdown.extensions.fenced_code',
+    'markdown.extensions.tables',
+    'markdown.extensions.extra',
+    'markdown.extensions.nl2br',
+    # README 渲染库
+    'tkhtmlview',
+    # Pillow 的 Tkinter 集成
+    'PIL._tkinter_finder',
+]
+
+# ---------- Analysis ----------
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    # 修改这里：把用到的图标都打包进去
-    datas=[
-        ('tubiao/tubiao.ico', 'tubiao'),
-        ('tubiao/logo.png', 'tubiao'),  # 如果你有做 login 界面的 logo 就加上，没有可以删掉这行
-    ],
-    hiddenimports=[
-        # pystray 针对不同系统的后端
-        'pystray._win32',
-        'pystray._darwin',
-        'pystray._xorg',
-        # keyring 针对不同系统的后端
-        'keyring.backends.Windows',
-        'keyring.backends.macOS',
-        'keyring.backends.SecretService',
-        'keyring.backends.kwallet',
-        # 补全 Windows 系统下的凭据依赖
-        'win32ctypes.pywin32',
-    ],
+    datas=_datas,
+    hiddenimports=_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -36,6 +62,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# ---------- EXE ----------
 exe = EXE(
     pyz,
     a.scripts,
@@ -46,13 +73,13 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,  # 保持 False 关闭黑框
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='tubiao/tubiao.ico',  # 这里已经指定了 exe 文件本身在资源管理器里的图标
+    icon='tubiao/tubiao.ico' if os.path.exists('tubiao/tubiao.ico') else None,
 )
 
 coll = COLLECT(

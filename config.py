@@ -40,6 +40,11 @@ class ConfigStore:
         self.favorites: list[dict] = []   # [{"repo": str, "note": str, "ts": float}]
         self.muted_repos: list[str] = []
         self.theme_colors: dict = {}
+        # ---- 自动更新 ----
+        self.update_repo = ""
+        self.update_channel = "stable"        # stable / beta
+        self.auto_check_update = True
+        self.skipped_version = ""
         self._tokens_in_file: dict[str, str] = {}
         self._load()
 
@@ -77,6 +82,11 @@ class ConfigStore:
         self.muted_repos = data.get("muted_repos", []) or []
         self.theme_colors = data.get("theme_colors", {}) or {}
         self._tokens_in_file = data.get("tokens", {}) or {}
+        # ---- 自动更新 ----
+        self.update_repo = data.get("update_repo", "") or ""
+        self.update_channel = data.get("update_channel", "stable") or "stable"
+        self.auto_check_update = bool(data.get("auto_check_update", True))
+        self.skipped_version = data.get("skipped_version", "") or ""
 
     def save(self) -> bool:
         data = {
@@ -95,6 +105,11 @@ class ConfigStore:
             "muted_repos": self.muted_repos,
             "theme_colors": self.theme_colors,
             "tokens": self._tokens_in_file,
+            # ---- 自动更新 ----
+            "update_repo": self.update_repo,
+            "update_channel": self.update_channel,
+            "auto_check_update": self.auto_check_update,
+            "skipped_version": self.skipped_version,
         }
         try:
             os.makedirs(self.dir, exist_ok=True)

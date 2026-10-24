@@ -30,6 +30,10 @@ class RepoDetailWindow(tk.Toplevel):
         self.repo = repo_full
         self.data = repo_data
         self.colors = app.colors
+        # 让子对话框（EditRepoDialog / CreatePRDialog / CreateReleaseDialog）能继承这些属性
+        self.ui_font = app.ui_font
+        self.mono_font = app.mono_font
+        self.icon_path = getattr(app, "icon_path", "")
         self.title(f"{repo_full} — 详情")
         self.geometry("1000x740")
         self.transient(app)
@@ -82,6 +86,9 @@ class RepoDetailWindow(tk.Toplevel):
         topics = fields.pop("topics", None)
 
         def ok(data):
+            # 让本地缓存里的 topics 也反映最新值
+            if topics is not None:
+                data["topics"] = topics
             self.data = data
             self.app._repo_cache[self.repo] = data
             if topics is not None:
@@ -125,6 +132,8 @@ class RepoDetailWindow(tk.Toplevel):
             return self.app.api.list_branches(self.repo)
 
         def show(branches):
+            if not self._alive():
+                return
             names = [b["name"] for b in branches]
             if not names:
                 messagebox.showinfo("提示", "该仓库暂无分支", parent=self)
@@ -417,6 +426,7 @@ class RepoDetailWindow(tk.Toplevel):
         sha = sel[0]
 
         def ok(text):
+            if not self._alive(): return
             win = tk.Toplevel(self)
             win.title(f"Diff: {sha[:7]}")
             win.geometry("900x680")

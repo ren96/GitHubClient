@@ -168,6 +168,9 @@ class GistDialog(tk.Toplevel):
         except Exception:
             pass
 
+        # 保存原始文件，用于编辑时保留其他文件
+        self._existing_files = (gist_data.get("files") or {}) if gist_data else {}
+
         f = ttk.Frame(self, padding=14)
         f.pack(fill="both", expand=True)
         ttk.Label(f, text="描述").pack(anchor="w")
@@ -212,9 +215,16 @@ class GistDialog(tk.Toplevel):
         if not content.strip():
             messagebox.showwarning("提示", "内容不能为空", parent=self)
             return
+
+        # 保留原 Gist 中未被编辑的其他文件
+        files = {name: {"content": content}}
+        for fn, meta in self._existing_files.items():
+            if fn != name:
+                files[fn] = {"content": (meta or {}).get("content") or ""}
+
         self.result = {
             "description": self.desc_var.get().strip(),
-            "files": {name: {"content": content}},
+            "files": files,
             "public": self.public_var.get(),
         }
         self.destroy()

@@ -7,7 +7,14 @@ import subprocess
 
 
 def get_base_dir():
-    if getattr(sys, 'frozen', False):
+    # ---- 修复：PyInstaller 打包后资源位于 _MEIPASS ----
+    # - onefile 模式：解压到临时目录 sys._MEIPASS
+    # - onedir 模式（PyInstaller 6.x）：datas 位于 _internal，_MEIPASS 也指向它
+    # - 开发模式：__file__ 所在目录
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return meipass
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
@@ -39,8 +46,15 @@ def _fmt_time(s: str) -> str:
     if not s:
         return ""
     s = s.strip()
-    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ",
-                "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z"):
+    from datetime import datetime
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        pass
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
         try:
             return time.strftime("%Y-%m-%d %H:%M", time.strptime(s, fmt))
         except (ValueError, TypeError):
@@ -201,26 +215,27 @@ def notify_desktop(title: str, msg: str):
     """跨平台桌面通知，纯原生实现，无第三方依赖，异步非阻塞。"""
     try:
         if sys.platform == "win32":
-            # 使用 PowerShell 原生调用 Windows Toast API
-            # 通过 $args 传参，彻底避免单引号/双引号/特殊字符导致的注入和转义崩溃
+            env = os.environ.copy()
+            env["GH_NOTIFY_TITLE"] = title
+            env["GH_NOTIFY_MSG"] = msg
             ps_script = """
             $ErrorActionPreference = 'SilentlyContinue'
             [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null
             $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
             $textNodes = $template.GetElementsByTagName('text')
-            $textNodes.Item(0).AppendChild($template.CreateTextNode($args[0])) | Out-Null
-            $textNodes.Item(1).AppendChild($template.CreateTextNode($args[1])) | Out-Null
+            $textNodes.Item(0).AppendChild($template.CreateTextNode($env:GH_NOTIFY_TITLE)) | Out-Null
+            $textNodes.Item(1).AppendChild($template.CreateTextNode($env:GH_NOTIFY_MSG)) | Out-Null
             $toast = [Windows.UI.Notifications.ToastNotification]::new($template)
             [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('GitHub 客户端').Show($toast)
             """
             subprocess.Popen(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script, title, msg],
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+                env=env,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
             )
 
         elif sys.platform == "darwin":
-            # macOS 使用 AppleScript 的 argv 传参，避免引号转义问题
             apple_script = 'on run argv\n display notification (item 1 of argv) with title (item 2 of argv)\nend run'
             subprocess.Popen(
                 ["osascript", "-e", apple_script, msg, title],
@@ -229,17 +244,17 @@ def notify_desktop(title: str, msg: str):
             )
 
         else:
-            # Linux: 优先使用 notify-send，失败则尝试 zenity 或 kdialog
             try:
-                subprocess.Popen(["notify-send", title, msg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(["notify-send", title, msg],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except FileNotFoundError:
                 try:
-                    subprocess.Popen(["zenity", "--info", "--title", title, "--text", msg], stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL)
+                    subprocess.Popen(["zenity", "--info", "--title", title, "--text", msg],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except FileNotFoundError:
                     try:
-                        subprocess.Popen(["kdialog", "--title", title, "--msgbox", msg], stdout=subprocess.DEVNULL,
-                                         stderr=subprocess.DEVNULL)
+                        subprocess.Popen(["kdialog", "--title", title, "--msgbox", msg],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     except FileNotFoundError:
                         logging.warning("Linux 下未找到任何可用的通知程序 (notify-send / zenity / kdialog)")
     except Exception as e:
