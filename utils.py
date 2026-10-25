@@ -63,25 +63,32 @@ def _fmt_time(s: str) -> str:
 
 
 def _rel_time(s: str) -> str:
-    abs_ = _fmt_time(s)
-    if not abs_:
+    """用 datetime 精准计算相对时间，避免 time.mktime 的时区误差。"""
+    if not s:
         return ""
+    from datetime import datetime, timezone
     try:
-        t = time.mktime(time.strptime(abs_, "%Y-%m-%d %H:%M"))
-        diff = time.time() - t
-    except Exception:
-        return abs_
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        diff = (now - dt).total_seconds()
+    except (ValueError, TypeError):
+        return _fmt_time(s)
+
+    if diff < 0:
+        return "刚刚"
     if diff < 60:
         return "刚刚"
     if diff < 3600:
         return f"{int(diff // 60)} 分钟前"
     if diff < 86400:
         return f"{int(diff // 3600)} 小时前"
-    if diff < 2592000:
+    if diff < 86400 * 30:
         return f"{int(diff // 86400)} 天前"
-    if diff < 31536000:
-        return f"{int(diff // 2592000)} 个月前"
-    return abs_[:10]
+    if diff < 86400 * 365:
+        return f"{int(diff // (86400 * 30))} 个月前"
+    return _fmt_time(s)[:10]
 
 
 def _fmt_bytes(n) -> str:

@@ -16,7 +16,8 @@ from utils import (
 from config import ConfigStore, Cache, KEYRING_OK
 from api import GitHubAPI
 from dialogs import (IssueDialog, CreateRepoDialog, CommentDialog,
-                     SettingsDialog, OAuthDialog, UploadProjectDialog, UpdateDialog)
+                     SettingsDialog, OAuthDialog, UploadProjectDialog, UpdateDialog,
+                     AssetPickerDialog)
 from repo_detail import RepoDetailWindow
 from issue_detail import IssueDetailWindow
 from pr_detail import PRDetailWindow
@@ -68,6 +69,14 @@ build/
 
 class GitHubApp(tk.Tk):
     def __init__(self):
+        # 高 DPI 感知（必须在创建 Tk 之前）
+        try:
+            if sys.platform == "win32":
+                from ctypes import windll
+                windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass
+
         super().__init__()
         self.title("GitHub 客户端")
         self.minsize(1000, 700)
@@ -98,14 +107,12 @@ class GitHubApp(tk.Tk):
         self._search_after = None
         self._assignee_after = None
 
-        # 请求代次
         self._gen_repos = 0
         self._gen_issues = 0
         self._gen_pulls = 0
         self._gen_notifs = 0
         self._gen_star = 0
 
-        # 通知
         self._last_unread = 0
         self._poll_after = None
         self._dl_window: Optional[DownloadQueueWindow] = None
@@ -113,13 +120,11 @@ class GitHubApp(tk.Tk):
         self._shortcuts_win = None
         self._cmd_palette = None
 
-        # 更新
         self._update_check_launched = False
 
         self.cfg = ConfigStore()
         self.cache = Cache()
 
-        # 几何恢复与启动最大化优化
         try:
             if self.cfg.geometry == "zoomed":
                 self.state("zoomed")
@@ -151,7 +156,6 @@ class GitHubApp(tk.Tk):
             logging.warning(f"找不到图标文件: {self.icon_path}")
             return
 
-        # ① 尝试用 iconphoto 设置高 DPI 图标
         try:
             from PIL import Image, ImageTk
             ico = Image.open(self.icon_path)
@@ -175,7 +179,6 @@ class GitHubApp(tk.Tk):
         except Exception as e:
             logging.warning(f"iconphoto 加载失败: {e}")
 
-        # ② Windows 必须显式设置主窗口图标，否则依然会显示 Tk 默认图标
         if sys.platform == "win32":
             try:
                 self.iconbitmap(self.icon_path)
@@ -214,17 +217,20 @@ class GitHubApp(tk.Tk):
             ACCENT, DANGER = "#2f81f7", "#f85149"
             TREE_BG, TREE_ODD, TREE_FG = "#0d1117", "#161b22", "#e6edf3"
             CARD_BORDER, HEADER_BG = "#30363d", "#161b22"
+            SUCCESS = "#3fb950"
         else:
             BG, FG, ENTRY_BG, HINT = "#f6f8fa", "#1f2328", "#ffffff", "#57606a"
             ACCENT, DANGER = "#0969da", "#cf222e"
             TREE_BG, TREE_ODD, TREE_FG = "#ffffff", "#f6f8fa", "#1f2328"
             CARD_BORDER, HEADER_BG = "#d0d7de", "#ffffff"
+            SUCCESS = "#1a7f37"
 
         self.colors = {
             "BG": BG, "FG": FG, "ACCENT": ACCENT, "DANGER": DANGER,
             "HINT": HINT, "TREE_BG": TREE_BG, "TREE_ODD": TREE_ODD,
             "TREE_FG": TREE_FG, "ENTRY_BG": ENTRY_BG,
             "CARD_BORDER": CARD_BORDER, "HEADER_BG": HEADER_BG,
+            "SUCCESS": SUCCESS,
         }
         self.configure(bg=BG)
 
@@ -234,35 +240,59 @@ class GitHubApp(tk.Tk):
         style.configure("TFrame", background=BG)
         style.configure("Header.TFrame", background=HEADER_BG)
         style.configure("Status.TFrame", background=BG)
+
+        # 卡片：细边框 + 内边距模拟圆角观感
         style.configure("Card.TFrame", background=ENTRY_BG, relief="solid", borderwidth=1)
+
         style.configure("TLabel", background=BG, foreground=FG, font=(self.ui_font, self.font_size))
         style.configure("Header.TLabel", background=HEADER_BG, foreground=FG)
         style.configure("Hint.TLabel", foreground=HINT)
         style.configure("Danger.TLabel", foreground=DANGER)
-        style.configure("Success.TLabel", foreground="#1a7f37")
-        style.configure("Title.TLabel", font=(self.ui_font, self.font_size + 14, "bold"))
+        style.configure("Success.TLabel", foreground=SUCCESS)
+        style.configure("Title.TLabel", font=(self.ui_font, self.font_size + 12, "bold"))
         style.configure("Subtitle.TLabel", font=(self.ui_font, self.font_size), foreground=HINT)
-        style.configure("TButton", padding=(12, 6), font=(self.ui_font, self.font_size))
+
+        # 按钮：主次分明
+        style.configure("TButton", padding=(14, 7), font=(self.ui_font, self.font_size))
         style.configure("Accent.TButton", foreground="white", background=ACCENT)
-        style.map("Accent.TButton", background=[("active", ACCENT), ("disabled", HINT)])
+        style.map("Accent.TButton",
+                  background=[("active", ACCENT), ("disabled", HINT)],
+                  foreground=[("disabled", "white")])
         style.configure("Danger.TButton", foreground="white", background=DANGER)
-        style.map("Danger.TButton", background=[("active", DANGER), ("disabled", HINT)])
-        style.configure("Treeview", rowheight=int(self.font_size * 2.8), background=TREE_BG,
-                        fieldbackground=TREE_BG, foreground=TREE_FG, borderwidth=0, font=(self.ui_font, self.font_size))
-        style.configure("Treeview.Heading", font=(self.ui_font, self.font_size - 1, "bold"), padding=(8, 6))
-        style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", "white")])
+        style.map("Danger.TButton",
+                  background=[("active", DANGER), ("disabled", HINT)],
+                  foreground=[("disabled", "white")])
+
+        # 表格：更舒展
+        style.configure("Treeview", rowheight=int(self.font_size * 3.0),
+                        background=TREE_BG, fieldbackground=TREE_BG,
+                        foreground=TREE_FG, borderwidth=0,
+                        font=(self.ui_font, self.font_size))
+        style.configure("Treeview.Heading",
+                        font=(self.ui_font, self.font_size - 1, "bold"),
+                        padding=(10, 8))
+        style.map("Treeview",
+                  background=[("selected", ACCENT)],
+                  foreground=[("selected", "white")])
+
+        # Notebook
         style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(2, 4, 2, 0))
-        style.configure("TNotebook.Tab", padding=(18, 9), font=(self.ui_font, self.font_size), background=BG,
-                        borderwidth=0)
-        style.map("TNotebook.Tab", background=[("selected", ENTRY_BG), ("active", BG)],
+        style.configure("TNotebook.Tab", padding=(20, 10),
+                        font=(self.ui_font, self.font_size),
+                        background=BG, borderwidth=0)
+        style.map("TNotebook.Tab",
+                  background=[("selected", ENTRY_BG), ("active", BG)],
                   foreground=[("selected", ACCENT), ("active", FG)])
-        style.configure("TEntry", padding=6, font=(self.ui_font, self.font_size))
-        style.configure("TCombobox", padding=5, font=(self.ui_font, self.font_size))
-        style.configure("TProgressbar", thickness=8)
+
+        style.configure("TEntry", padding=8, font=(self.ui_font, self.font_size))
+        style.configure("TCombobox", padding=6, font=(self.ui_font, self.font_size))
+        style.configure("TProgressbar", thickness=10)
         style.configure("TCheckbutton", background=BG, font=(self.ui_font, self.font_size))
         style.configure("TRadiobutton", background=BG, font=(self.ui_font, self.font_size))
         style.configure("TSeparator", background=CARD_BORDER)
 
+        for tree in self._iter_trees(self):
+            self._tag_tree(tree)
         self._refresh_login_colors()
 
     def _refresh_login_colors(self):
@@ -290,9 +320,10 @@ class GitHubApp(tk.Tk):
             if not colors: return
             tree.tag_configure("odd", background=colors["TREE_ODD"])
             tree.tag_configure("even", background=colors["TREE_BG"])
-            tree.tag_configure("closed", foreground="#8c959f")
+            tree.tag_configure("closed", foreground=colors["HINT"])
             tree.tag_configure("error", foreground=colors["DANGER"])
             tree.tag_configure("loading", foreground=colors["HINT"])
+            tree.tag_configure("success", foreground=colors["SUCCESS"])
         except Exception:
             pass
 
@@ -360,10 +391,13 @@ class GitHubApp(tk.Tk):
     def _extract_repo(iid):
         return iid.split(":", 1)[0] if ":" in iid else iid
 
-    def _status(self, msg, timeout=4000):
-        if not hasattr(self, "status_label"): return
+    def _status(self, msg, timeout=4000, kind="info"):
+        if not hasattr(self, "status_label"):
+            return
+        style = {"info": "Hint.TLabel", "ok": "Success.TLabel",
+                 "err": "Danger.TLabel"}.get(kind, "Hint.TLabel")
         try:
-            self.status_label.configure(text=msg)
+            self.status_label.configure(text=msg, style=style)
         except Exception:
             return
         if self._status_after:
@@ -371,7 +405,9 @@ class GitHubApp(tk.Tk):
                 self.after_cancel(self._status_after)
             except Exception:
                 pass
-        self._status_after = self.after(timeout, lambda: self.status_label.configure(text="就绪"))
+        self._status_after = self.after(
+            timeout,
+            lambda: self.status_label.configure(text="就绪", style="Hint.TLabel"))
 
     def _make_tree(self, parent, name, cols, heads, widths, height=16):
         saved_w = getattr(self.cfg, "col_widths", {}).get(name, widths)
@@ -385,15 +421,27 @@ class GitHubApp(tk.Tk):
             items = [(tree.set(k, col), k) for k in tree.get_children('')]
 
             def _key(v):
-                s = str(v[0]).lower()
-                try:
-                    return (0, float(re.sub(r'[^\d.-]', '', s) or 0))
-                except:
-                    return (1, s)
+                s = str(v[0]).strip()
+                # 1) 提取第一个连续数字串（可含小数点），如 "v1.2.3" → (1,2,3)
+                m = re.search(r'\d+(?:\.\d+)*', s)
+                if m:
+                    try:
+                        return (0, tuple(int(x) for x in m.group().split(".")))
+                    except ValueError:
+                        pass
+                # 2) 否则按首数字单值比较（"12 天前" → 12）
+                m2 = re.search(r'\d+(?:\.\d+)?', s)
+                if m2:
+                    try:
+                        return (0, (float(m2.group()),))
+                    except ValueError:
+                        pass
+                return (1, s.lower())
 
             desc = getattr(tree, "_sort_desc", {}).get(col, False)
             items.sort(key=_key, reverse=desc)
-            if not hasattr(tree, "_sort_desc"): tree._sort_desc = {}
+            if not hasattr(tree, "_sort_desc"):
+                tree._sort_desc = {}
             tree._sort_desc[col] = not desc
 
             for i, (_, k) in enumerate(items):
@@ -430,7 +478,6 @@ class GitHubApp(tk.Tk):
         vals = [icon + msg] + [""] * (len(cols) - 1)
         tree.insert("", "end", iid="__state__", values=vals, tags=(kind,))
 
-        # 记录当前重试回调；只绑定一次，避免多次累加
         tree._current_retry = retry if kind == "error" else None
         if kind == "error" and retry and not getattr(tree, "_retry_bound", False):
             def _on_retry(_e):
@@ -567,7 +614,6 @@ class GitHubApp(tk.Tk):
         except Exception:
             pass
 
-    # ---------- 设置 / 账号 ----------
     def _open_settings(self):
         if not self._focus_in_app(): return
         try:
@@ -593,7 +639,7 @@ class GitHubApp(tk.Tk):
         self._setup_theme(self._resolve_theme(self.cfg.theme))
         for tree in self._iter_trees(self):
             self._tag_tree(tree)
-        self._status("设置已保存")
+        self._status("设置已保存", kind="ok")
         self._schedule_poll()
 
     def _switch_account(self):
@@ -621,7 +667,6 @@ class GitHubApp(tk.Tk):
 
         self.run_async(work, ok, err)
 
-    # ---------- 自动更新 ----------
     def check_update(self, manual=False):
         repo = (self.cfg.update_repo or "").strip()
         if not repo:
@@ -648,7 +693,7 @@ class GitHubApp(tk.Tk):
         def ok(info):
             if info is None:
                 if manual:
-                    self._status("已是最新版本")
+                    self._status("已是最新版本", kind="ok")
                     messagebox.showinfo(
                         "检查更新",
                         f"当前已是最新版本（v{APP_VERSION}）",
@@ -656,7 +701,7 @@ class GitHubApp(tk.Tk):
                 return
             if not manual and info.version == (self.cfg.skipped_version or ""):
                 return
-            self._status(f"发现新版本 v{info.version}")
+            self._status(f"发现新版本 v{info.version}", kind="ok")
             try:
                 UpdateDialog(self, info, self.api, repo)
             except Exception:
@@ -664,14 +709,13 @@ class GitHubApp(tk.Tk):
 
         def err(e):
             if manual:
-                self._status("检查更新失败")
+                self._status("检查更新失败", kind="err")
                 self._err(e)
             else:
                 logging.warning("自动检查更新失败：%s", e)
 
         self.run_async(work, ok, err)
 
-    # ---------- 登录 ----------
     def _build_login(self):
         outer = ttk.Frame(self)
         outer.pack(fill="both", expand=True)
@@ -699,13 +743,14 @@ class GitHubApp(tk.Tk):
         ttk.Label(center, text=f"v{APP_VERSION}  ·  使用 Personal Access Token 或 OAuth Device Flow 登录",
                   style="Subtitle.TLabel").pack(pady=(0, 22))
 
-        border = tk.Frame(center, bg=self.colors["CARD_BORDER"])
-        border.pack()
-        self._login_border = border
-        accent = tk.Frame(border, bg=self.colors["ACCENT"], height=3)
+        # 卡片：外边框 + 顶部 accent 条
+        card = tk.Frame(center, bg=self.colors["CARD_BORDER"])
+        card.pack()
+        self._login_border = card
+        accent = tk.Frame(card, bg=self.colors["ACCENT"], height=3)
         accent.pack(fill="x")
         self._login_accent = accent
-        inner = ttk.Frame(border, padding=(36, 28))
+        inner = ttk.Frame(card, padding=(36, 28))
         inner.pack(fill="both", expand=True, padx=1, pady=(0, 1))
 
         ttk.Label(inner, text="账号", style="Hint.TLabel", font=(self.ui_font, 9, "bold")).pack(anchor="w")
@@ -814,12 +859,11 @@ class GitHubApp(tk.Tk):
                 text=f"👤 @{user['login']}  ·  公开 {public_count}  ·  私有 {private_count}  ·  关注者 {user['followers']}")
             self._update_status_user()
             self._fetch_scopes_async()
-            self._status("已登录")
+            self._status("已登录", kind="ok")
             self._refresh_repo_switch()
             self.load_repos(reset=True)
             self._schedule_poll()
 
-            # 自动检查更新（同一会话仅触发一次）
             if (self.cfg.auto_check_update
                     and (self.cfg.update_repo or "").strip()
                     and not self._update_check_launched):
@@ -870,8 +914,8 @@ class GitHubApp(tk.Tk):
                 self.after_cancel(self._poll_after)
             except Exception:
                 pass
+            self._poll_after = None
 
-    # ---------- 主界面 ----------
     def _build_main(self):
         mf = ttk.Frame(self)
         self.main_frame = mf
@@ -1054,7 +1098,7 @@ class GitHubApp(tk.Tk):
             self._status(f"已取消收藏 {repo}")
         else:
             self.cfg.add_favorite(repo)
-            self._status(f"已收藏 {repo}")
+            self._status(f"已收藏 {repo}", kind="ok")
         self._refresh_repo_switch()
 
     def _toggle_mute(self, repo):
@@ -1069,13 +1113,13 @@ class GitHubApp(tk.Tk):
                 open_in_vscode(path)
             else:
                 open_terminal(path)
-            self._status(f"已打开：{path}")
+            self._status(f"已打开：{path}", kind="ok")
         except Exception as e:
             messagebox.showerror("错误", str(e))
 
     def _pull_path(self, path):
         def ok(out):
-            self._status("git pull 完成")
+            self._status("git pull 完成", kind="ok")
             messagebox.showinfo("完成", out[-1500:] or "无输出")
 
         self.run_async(lambda: self.api.pull_repo(path), ok)
@@ -1144,7 +1188,8 @@ class GitHubApp(tk.Tk):
 
     def _render_repos(self, repos, page):
         for iid in self.repo_tree.get_children():
-            if str(iid).startswith("__state__"): self.repo_tree.delete(iid)
+            if str(iid).startswith("__state__"):
+                self.repo_tree.delete(iid)
 
         if not repos:
             if page == 1:
@@ -1155,12 +1200,14 @@ class GitHubApp(tk.Tk):
 
         for i, r in enumerate(repos):
             iid = r["full_name"]
+            # 缓存完整数据，双击"详情"无需再次请求
+            self._repo_cache[iid] = r
             tags = ("odd",) if (i + (page - 1) * 50) % 2 else ("even",)
             if not self.repo_tree.exists(iid):
                 vis_str = "🔒 私有" if r["private"] else "🌐 公开"
-                local = "📁" if self._local_repo_path(r["full_name"]) else "—"
+                local = "📁" if self._local_repo_path(iid) else "—"
                 self.repo_tree.insert("", "end", iid=iid, values=(
-                    r["full_name"], vis_str, r["stargazers_count"],
+                    iid, vis_str, r["stargazers_count"],
                     r.get("language") or "—",
                     _rel_time(r["updated_at"]), local), tags=tags)
         self._status(f"已加载第 {page} 页（{len(repos)} 个）")
@@ -1187,7 +1234,7 @@ class GitHubApp(tk.Tk):
         d = dlg.result
 
         def ok(repo):
-            self._status(f"已创建 {repo['full_name']}")
+            self._status(f"已创建 {repo['full_name']}", kind="ok")
             self.repo_visibility.set("all")
             self.after(800, lambda: self.load_repos(reset=True))
             messagebox.showinfo("完成", f"已创建 {repo['full_name']}")
@@ -1209,7 +1256,7 @@ class GitHubApp(tk.Tk):
             return
 
         def ok(_):
-            self._status(f"已删除 {repo}")
+            self._status(f"已删除 {repo}", kind="ok")
             self._repo_cache.pop(repo, None)
             if self.current_repo == repo:
                 self.current_repo = ""
@@ -1221,7 +1268,6 @@ class GitHubApp(tk.Tk):
         self.run_async(lambda: self.api.delete_repo(repo), ok)
 
     def upload_project(self):
-        """把本地目录上传到 GitHub 仓库"""
         if not self._focus_in_app():
             return
         if not self.api:
@@ -1243,7 +1289,6 @@ class GitHubApp(tk.Tk):
                 parent=self):
             return
 
-        # 可选：自动生成 .gitignore
         if r["add_gitignore"]:
             gi = os.path.join(r["local"], ".gitignore")
             if not os.path.exists(gi):
@@ -1254,8 +1299,6 @@ class GitHubApp(tk.Tk):
                     logging.warning(f"写入 .gitignore 失败：{e}")
 
         def work():
-            # 仓库不存在则创建（auto_init=False 避免空仓库冲突）
-            # 只把 404 当“不存在”，其余错误（网络 / 限流 / 权限）原样抛出
             exists = False
             try:
                 self.api.get_repo(full)
@@ -1279,7 +1322,7 @@ class GitHubApp(tk.Tk):
             )
 
         def ok(url):
-            self._status(f"已上传：{full}")
+            self._status(f"已上传：{full}", kind="ok")
             self.cfg.add_recent_repo(full)
             self._refresh_repo_switch()
             self.after(600, lambda: self.load_repos(reset=True))
@@ -1290,13 +1333,12 @@ class GitHubApp(tk.Tk):
                 parent=self)
 
         def err(e):
-            self._status("上传失败")
+            self._status("上传失败", kind="err")
             self._err(e)
 
         self._status("正在上传项目…")
         self.run_async(work, ok, err)
 
-    # ---------- 搜索 ----------
     def _build_search_tab(self, nb):
         tab = ttk.Frame(nb, padding=14)
         self.search_tab = tab
@@ -1309,7 +1351,6 @@ class GitHubApp(tk.Tk):
             ttk.Radiobutton(sbar, text=txt, variable=self.search_mode, value=val, command=self._on_search_typing).pack(
                 side="left", padx=(0, 6))
 
-        # Combobox 而非 Entry：支持下拉历史
         self.search_entry = ttk.Combobox(sbar, width=48)
         self.search_entry.pack(side="left", padx=(6, 6))
         self.search_entry.bind("<Return>", lambda _e: self.do_search())
@@ -1340,14 +1381,19 @@ class GitHubApp(tk.Tk):
         self.search_progress = ttk.Progressbar(tab, mode="determinate", maximum=100)
 
     def _on_search_typing(self, event=None):
-        if event and event.keysym in ("Up", "Down", "Return", "Escape"): return
-        if self.search_mode.get() != "repos": return
+        if event and event.keysym in ("Up", "Down", "Return", "Escape"):
+            return
+        if self.search_mode.get() != "repos":
+            return
+        q = self.search_entry.get().strip()
+        if len(q) < 2:
+            return
         if self._search_after:
             try:
                 self.after_cancel(self._search_after)
             except Exception:
                 pass
-        self._search_after = self.after(500, self.do_search)
+        self._search_after = self.after(550, self.do_search)
 
     def do_search(self):
         q = self.search_entry.get().strip()
@@ -1449,7 +1495,6 @@ class GitHubApp(tk.Tk):
         self.search_tree.delete(*self.search_tree.get_children())
         self.search_status.configure(text="")
 
-    # ---------- Issue ----------
     def _build_issue_tab(self, nb):
         tab = ttk.Frame(nb, padding=14)
         nb.add(tab, text="📝 Issues")
@@ -1640,7 +1685,7 @@ class GitHubApp(tk.Tk):
             d = dlg.result
 
             def ok(issue):
-                self._status(f"已创建 #{issue['number']}")
+                self._status(f"已创建 #{issue['number']}", kind="ok")
                 self._reload_issues()
 
             self._busy_do([self.issue_new_btn],
@@ -1669,7 +1714,7 @@ class GitHubApp(tk.Tk):
         if not messagebox.askyesno("确认", f"{action} #{number}？"): return
 
         def done(_):
-            self._status(f"已{action} #{number}")
+            self._status(f"已{action} #{number}", kind="ok")
             self._reload_issues()
 
         self._busy_do([self.issue_toggle_btn],
@@ -1684,7 +1729,7 @@ class GitHubApp(tk.Tk):
         if not dlg.result: return
 
         def ok(_):
-            self._status("评论已发送")
+            self._status("评论已发送", kind="ok")
 
         self.run_async(lambda: self.api.create_comment(self.current_repo, number, dlg.result), ok)
 
@@ -1699,12 +1744,11 @@ class GitHubApp(tk.Tk):
         if not messagebox.askyesno("⚠️ 永久删除", f"永久删除 #{number}？不可恢复。", icon="warning"): return
 
         def done(_):
-            self._status(f"已删除 #{number}")
+            self._status(f"已删除 #{number}", kind="ok")
             self._reload_issues()
 
         self._busy_do([self.issue_delete_btn], lambda: self.api.delete_issue(node_id), done)
 
-    # ---------- Pull ----------
     def _build_pull_tab(self, nb):
         tab = ttk.Frame(nb, padding=14)
         nb.add(tab, text="🔀 PR")
@@ -1831,7 +1875,7 @@ class GitHubApp(tk.Tk):
         if not messagebox.askyesno("合并 PR", f"确定合并 #{number}？"): return
 
         def done(res):
-            self._status(f"合并结果：{res.get('merged')}")
+            self._status(f"合并结果：{res.get('merged')}", kind="ok")
             self._reload_pulls()
 
         self.run_async(lambda: self.api.merge_pull(self.current_repo, number), done)
@@ -1843,12 +1887,11 @@ class GitHubApp(tk.Tk):
         if not messagebox.askyesno("关闭 PR", f"确定关闭 #{number}？"): return
 
         def done(_):
-            self._status(f"已关闭 #{number}")
+            self._status(f"已关闭 #{number}", kind="ok")
             self._reload_pulls()
 
         self.run_async(lambda: self.api.close_pull(self.current_repo, number), done)
 
-    # ---------- Notifications ----------
     def _build_notify_tab(self, nb):
         tab = ttk.Frame(nb, padding=14)
         nb.add(tab, text="🔔 通知")
@@ -1901,7 +1944,7 @@ class GitHubApp(tk.Tk):
         nid = sel[0]
 
         def done(_):
-            self._status("已标记已读")
+            self._status("已标记已读", kind="ok")
             self.load_notifications()
 
         self.run_async(lambda: self.api.mark_notification_read(nid), done)
@@ -1914,7 +1957,6 @@ class GitHubApp(tk.Tk):
         url = (n["subject"].get("url") or "").replace("api.github.com/repos", "github.com").replace("/pulls/", "/pull/")
         if url: webbrowser.open(url)
 
-    # ---------- Starred ----------
     def _build_star_tab(self, nb):
         tab = ttk.Frame(nb, padding=14)
         nb.add(tab, text="⭐ Starred")
@@ -1967,7 +2009,7 @@ class GitHubApp(tk.Tk):
         repo = sel[0]
 
         def done(_):
-            self._status(f"已取消 Star：{repo}")
+            self._status(f"已取消 Star：{repo}", kind="ok")
             try:
                 self.star_tree.delete(repo)
             except Exception:
@@ -1975,7 +2017,6 @@ class GitHubApp(tk.Tk):
 
         self.run_async(lambda: self.api.unstar(repo), done)
 
-    # ---------- 详情 / 下载 ----------
     def _show_detail_for(self, tree):
         iid = self._selected(tree)
         if not iid or str(iid).startswith("__state__"):
@@ -2036,10 +2077,18 @@ class GitHubApp(tk.Tk):
             return
 
         def ok(out):
-            self._status(f"git pull 完成：{local}")
+            self._status(f"git pull 完成：{local}", kind="ok")
             messagebox.showinfo("完成", f"{local}\n\n{out[-1500:]}")
 
         self.run_async(lambda: self.api.pull_repo(local), ok)
+
+    def _get_speed_label(self, parent, attr_name):
+        """获取（或创建）速度标签；父级变化时自动重建。"""
+        lbl = getattr(self, attr_name, None)
+        if lbl is None or not lbl.winfo_exists() or lbl.master != parent:
+            lbl = ttk.Label(parent, text="", style="Hint.TLabel")
+            setattr(self, attr_name, lbl)
+        return lbl
 
     def _run_zip(self, tree, progress, buttons):
         iid = self._selected(tree)
@@ -2051,10 +2100,22 @@ class GitHubApp(tk.Tk):
         if not dest: return
         progress.stop()
         progress.configure(mode="determinate", value=0)
-        if not progress.winfo_ismapped(): progress.pack(fill="x", pady=(12, 0))
+        if not progress.winfo_ismapped():
+            progress.pack(fill="x", pady=(12, 0))
+
+        speed_lbl = self._get_speed_label(progress.master, "_zip_speed_label")
+        speed_lbl.configure(text="下载中…")
+        if not speed_lbl.winfo_ismapped():
+            speed_lbl.pack(anchor="w", pady=(4, 0))
+
+        def on_progress(p, speed=0):
+            self.after(0, lambda v=p, s=speed: (
+                progress.configure(value=v * 100),
+                speed_lbl.configure(text=f"{_fmt_bytes(s)}/s" if s > 0 else "下载中…")
+            ))
+
         self._busy_do(buttons,
-                      lambda: self.api.download_zip(repo, dest, on_progress=lambda p: self.after(0, lambda
-                          v=p: progress.configure(value=v * 100))),
+                      lambda: self.api.download_zip(repo, dest, on_progress=on_progress),
                       lambda path: self._dl_done(path, progress, dest),
                       lambda e: self._dl_fail(e, progress))
 
@@ -2082,14 +2143,26 @@ class GitHubApp(tk.Tk):
         progress.stop()
         progress.configure(mode="determinate", value=0)
         progress.pack_forget()
+        lbl = getattr(self, "_zip_speed_label", None)
+        if lbl is not None:
+            try:
+                lbl.pack_forget()
+            except Exception:
+                pass
         self._remember_dir(dest)
-        self._status(f"已保存到 {path}")
+        self._status(f"已保存到 {path}", kind="ok")
         messagebox.showinfo("完成", f"已保存：\n{path}")
 
     def _dl_fail(self, e, progress):
         progress.stop()
         progress.configure(mode="determinate", value=0)
         progress.pack_forget()
+        lbl = getattr(self, "_zip_speed_label", None)
+        if lbl is not None:
+            try:
+                lbl.pack_forget()
+            except Exception:
+                pass
         self._err(e)
 
     def _download_installer_for_repo_tab(self):
@@ -2112,17 +2185,29 @@ class GitHubApp(tk.Tk):
             if not assets:
                 messagebox.showinfo("提示", f"{repo} 最新 Release 无安装包")
                 return
-            dest = filedialog.askdirectory(title="选择保存目录", initialdir=self._initial_dir())
-            if not dest: return
-            for a in assets: self._enqueue_download(repo, a, dest)
-            self._status(f"{repo}：{len(assets)} 个文件已加入下载队列")
+
+            if len(assets) == 1:
+                selected = assets
+            else:
+                dlg = AssetPickerDialog(self, repo, assets)
+                self.wait_window(dlg)
+                selected = dlg.result or []
+                if not selected:
+                    return
+
+            dest = filedialog.askdirectory(title="选择保存目录",
+                                           initialdir=self._initial_dir())
+            if not dest:
+                return
+            for a in selected:
+                self._enqueue_download(repo, a, dest)
+            self._status(f"{repo}：{len(selected)} 个文件已加入下载队列", kind="ok")
 
         def err(e):
             messagebox.showinfo("提示", f"{repo} 无可用 Release：{e}")
 
         self.run_async(lambda: self.api.get_latest_release(repo), got, err)
 
-    # ---------- 通知轮询 ----------
     def _schedule_poll(self):
         if self._poll_after:
             try:

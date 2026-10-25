@@ -14,15 +14,14 @@ REPO_NAME_RE = re.compile(r"^[\w.-]{1,100}$")
 
 
 def _resolve_fonts(parent):
-    """从 parent（GitHubApp / Toplevel）或 parent.app 中获取字体与主题色。"""
     ui = getattr(parent, "ui_font", None) \
-        or getattr(getattr(parent, "app", None), "ui_font", "TkDefaultFont")
+         or getattr(getattr(parent, "app", None), "ui_font", "TkDefaultFont")
     mono = getattr(parent, "mono_font", None) \
-        or getattr(getattr(parent, "app", None), "mono_font", "TkFixedFont")
+           or getattr(getattr(parent, "app", None), "mono_font", "TkFixedFont")
     colors = getattr(parent, "colors", None) \
-        or getattr(getattr(parent, "app", None), "colors", {}) or {}
+             or getattr(getattr(parent, "app", None), "colors", {}) or {}
     icon = getattr(parent, "icon_path", None) \
-        or getattr(getattr(parent, "app", None), "icon_path", None)
+           or getattr(getattr(parent, "app", None), "icon_path", None)
     return ui, mono, colors, icon
 
 
@@ -51,8 +50,19 @@ class IssueDialog(tk.Toplevel):
             except Exception:
                 pass
 
-        f = ttk.Frame(self, padding=18)
+        # 底部操作栏
+        bar = ttk.Frame(self, padding=(18, 10))
+        bar.pack(fill="x", side="bottom")
+        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="保存", style="Accent.TButton",
+                   command=self._save).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.bind("<Control-Return>", lambda _e: self._save())
+
+        # 主内容区
+        f = ttk.Frame(self, padding=(18, 14, 18, 0))
         f.pack(fill="both", expand=True)
+
         ttk.Label(f, text="标题", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.title_var = tk.StringVar(value=initial_title)
         e = ttk.Entry(f, textvariable=self.title_var)
@@ -124,14 +134,6 @@ class IssueDialog(tk.Toplevel):
             ttk.Radiobutton(row, text="🔴 关闭", variable=self.state_var,
                             value="closed").pack(side="left")
 
-        bar = ttk.Frame(f)
-        bar.pack(fill="x", pady=(16, 0))
-        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
-        ttk.Button(bar, text="保存", style="Accent.TButton",
-                   command=self._save).pack(side="right", padx=(0, 8))
-        self.bind("<Escape>", lambda _e: self.destroy())
-        self.bind("<Control-Return>", lambda _e: self._save())
-
     def _render_preview(self):
         txt = self.body_text.get("1.0", "end-1c")
         self.preview_text.configure(state="normal")
@@ -139,7 +141,6 @@ class IssueDialog(tk.Toplevel):
         self.preview_text.tag_configure("b", font=(self.ui_font, 10, "bold"))
         self.preview_text.tag_configure("code", font=(self.mono_font, 10))
 
-        # 极简 Markdown 渲染
         lines = txt.split("\n")
         in_code = False
         for line in lines:
@@ -182,8 +183,8 @@ class CreateRepoDialog(tk.Toplevel):
         self.result = None
         self.transient(parent)
         self.grab_set()
-        self.geometry("540x400")
-        self.resizable(False, False)
+        self.geometry("540x420")
+        self.minsize(450, 380)
 
         ui_font, _mono, _colors, icon_path = _resolve_fonts(parent)
         if icon_path:
@@ -192,8 +193,15 @@ class CreateRepoDialog(tk.Toplevel):
             except Exception:
                 pass
 
-        f = ttk.Frame(self, padding=18)
+        bar = ttk.Frame(self, padding=(18, 10))
+        bar.pack(fill="x", side="bottom")
+        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="创建", style="Accent.TButton",
+                   command=self._save).pack(side="right", padx=(0, 8))
+
+        f = ttk.Frame(self, padding=(18, 14, 18, 0))
         f.pack(fill="both", expand=True)
+
         ttk.Label(f, text="仓库名称 *", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.name_var = tk.StringVar()
         e = ttk.Entry(f, textvariable=self.name_var)
@@ -209,11 +217,6 @@ class CreateRepoDialog(tk.Toplevel):
         ttk.Checkbutton(f, text="私有仓库", variable=self.private_var).pack(anchor="w")
         ttk.Checkbutton(f, text="自动初始化 README",
                         variable=self.init_var).pack(anchor="w", pady=(6, 0))
-        bar = ttk.Frame(f)
-        bar.pack(fill="x", side="bottom", pady=(18, 0))
-        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
-        ttk.Button(bar, text="创建", style="Accent.TButton",
-                   command=self._save).pack(side="right", padx=(0, 8))
 
     def _save(self):
         name = self.name_var.get().strip()
@@ -235,7 +238,8 @@ class EditRepoDialog(tk.Toplevel):
         self.result = None
         self.transient(parent)
         self.grab_set()
-        self.geometry("560x440")
+        self.geometry("560x520")
+        self.minsize(450, 450)
 
         ui_font, _mono, _colors, icon_path = _resolve_fonts(parent)
         if icon_path:
@@ -244,7 +248,13 @@ class EditRepoDialog(tk.Toplevel):
             except Exception:
                 pass
 
-        f = ttk.Frame(self, padding=18)
+        bar = ttk.Frame(self, padding=(18, 10))
+        bar.pack(fill="x", side="bottom")
+        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="保存", style="Accent.TButton",
+                   command=self._save).pack(side="right", padx=(0, 8))
+
+        f = ttk.Frame(self, padding=(18, 14, 18, 0))
         f.pack(fill="both", expand=True)
 
         ttk.Label(f, text="描述", font=(ui_font, 10, "bold")).pack(anchor="w")
@@ -265,12 +275,6 @@ class EditRepoDialog(tk.Toplevel):
         ttk.Checkbutton(f, text="私有仓库", variable=self.private_var).pack(anchor="w")
         self.archived_var = tk.BooleanVar(value=bool(repo_data.get("archived")))
         ttk.Checkbutton(f, text="归档（只读）", variable=self.archived_var).pack(anchor="w", pady=(6, 0))
-
-        bar = ttk.Frame(f)
-        bar.pack(fill="x", side="bottom", pady=(18, 0))
-        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
-        ttk.Button(bar, text="保存", style="Accent.TButton",
-                   command=self._save).pack(side="right", padx=(0, 8))
         self.repo_data = repo_data
 
     def _save(self):
@@ -292,32 +296,36 @@ class CommentDialog(tk.Toplevel):
         self.result = None
         self.transient(parent)
         self.grab_set()
-        self.geometry("620x400")
+        self.geometry("620x450")
+        self.minsize(450, 350)
         colors = getattr(parent, "colors", None) \
-            or getattr(getattr(parent, "app", None), "colors", {}) or {}
+                 or getattr(getattr(parent, "app", None), "colors", {}) or {}
         mono = getattr(parent, "mono_font", None) \
-            or getattr(getattr(parent, "app", None), "mono_font", "TkFixedFont")
+               or getattr(getattr(parent, "app", None), "mono_font", "TkFixedFont")
         icon_path = getattr(parent, "icon_path", None) \
-            or getattr(getattr(parent, "app", None), "icon_path", None)
+                    or getattr(getattr(parent, "app", None), "icon_path", None)
         if icon_path:
             try:
                 self.iconbitmap(icon_path)
             except Exception:
                 pass
-        f = ttk.Frame(self, padding=14)
-        f.pack(fill="both", expand=True)
-        self.text = tk.Text(f, wrap="word", font=(mono, 10), undo=True,
-                            relief="solid", bd=1,
-                            bg=colors.get("ENTRY_BG", "#fff"),
-                            fg=colors.get("FG", "#000"))
-        self.text.pack(fill="both", expand=True)
-        bar = ttk.Frame(f)
-        bar.pack(fill="x", pady=(10, 0))
+
+        bar = ttk.Frame(self, padding=(14, 10))
+        bar.pack(fill="x", side="bottom")
         ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
         ttk.Button(bar, text="发送", style="Accent.TButton",
                    command=self._ok).pack(side="right", padx=(0, 8))
         self.bind("<Escape>", lambda _e: self.destroy())
         self.bind("<Control-Return>", lambda _e: self._ok())
+
+        f = ttk.Frame(self, padding=(14, 14, 14, 0))
+        f.pack(fill="both", expand=True)
+
+        self.text = tk.Text(f, wrap="word", font=(mono, 10), undo=True,
+                            relief="solid", bd=1,
+                            bg=colors.get("ENTRY_BG", "#fff"),
+                            fg=colors.get("FG", "#000"))
+        self.text.pack(fill="both", expand=True)
 
     def _ok(self):
         body = self.text.get("1.0", "end-1c").strip()
@@ -347,7 +355,13 @@ class SettingsDialog(tk.Toplevel):
             except Exception:
                 pass
 
-        # 内容区（可滚动）
+        bar = ttk.Frame(self, padding=(18, 10))
+        bar.pack(fill="x", side="bottom")
+        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="保存", style="Accent.TButton",
+                   command=self._save).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda _e: self.destroy())
+
         outer = ttk.Frame(self)
         outer.pack(fill="both", expand=True)
         canvas = tk.Canvas(outer, borderwidth=0, highlightthickness=0)
@@ -368,7 +382,6 @@ class SettingsDialog(tk.Toplevel):
         f.bind("<Configure>", _on_frame_config)
         canvas.bind("<Configure>", _on_canvas_config)
 
-        # ---- 代理 ----
         ttk.Label(f, text="HTTP / HTTPS 代理（留空直连）",
                   font=(ui_font, 10, "bold")).pack(anchor="w")
         self.proxy_var = tk.StringVar(value=cfg.proxy)
@@ -381,13 +394,11 @@ class SettingsDialog(tk.Toplevel):
         self.proxy_status = ttk.Label(f, text="", style="Hint.TLabel")
         self.proxy_status.pack(anchor="w", pady=(0, 12))
 
-        # ---- OAuth ----
         ttk.Label(f, text="OAuth App Client ID",
                   font=(ui_font, 10, "bold")).pack(anchor="w")
         self.oauth_var = tk.StringVar(value=cfg.oauth_client_id)
         ttk.Entry(f, textvariable=self.oauth_var).pack(fill="x", pady=(4, 12))
 
-        # ---- 主题 ----
         ttk.Label(f, text="主题", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.theme_var = tk.StringVar(value=cfg.theme)
         t_row = ttk.Frame(f)
@@ -396,19 +407,16 @@ class SettingsDialog(tk.Toplevel):
             ttk.Radiobutton(t_row, text=txt, variable=self.theme_var,
                             value=val).pack(side="left", padx=(0, 12))
 
-        # ---- 字号 ----
         ttk.Label(f, text="界面字号大小", font=(ui_font, 10, "bold")).pack(anchor="w")
         self.font_var = tk.IntVar(value=getattr(cfg, "font_size", 10))
         ttk.Spinbox(f, from_=8, to=16, textvariable=self.font_var, width=10).pack(anchor="w", pady=(4, 12))
 
-        # ---- 轮询 ----
         ttk.Label(f, text="通知轮询间隔（秒，0 关闭）",
                   font=(ui_font, 10, "bold")).pack(anchor="w")
         self.poll_var = tk.IntVar(value=cfg.poll_interval)
         ttk.Spinbox(f, from_=0, to=3600, increment=30,
                     textvariable=self.poll_var, width=10).pack(anchor="w", pady=(4, 12))
 
-        # ---- 自动更新 ----
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=(6, 10))
         ttk.Label(f, text="自动更新", font=(ui_font, 10, "bold")).pack(anchor="w")
         ttk.Label(f, text="更新源仓库（owner/repo，留空禁用自动检查）",
@@ -431,15 +439,6 @@ class SettingsDialog(tk.Toplevel):
 
         ttk.Label(f, text=f"当前版本：v{APP_VERSION}",
                   style="Hint.TLabel").pack(anchor="w", pady=(8, 0))
-
-        # ---- 底部按钮 ----
-        bar = ttk.Frame(self, padding=(18, 10))
-        bar.pack(fill="x", side="bottom")
-        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
-        ttk.Button(bar, text="保存", style="Accent.TButton",
-                   command=self._save).pack(side="right", padx=(0, 8))
-
-        self.bind("<Escape>", lambda _e: self.destroy())
 
     def _test_proxy(self):
         self.test_btn.configure(state="disabled")
@@ -495,7 +494,8 @@ class CreatePRDialog(tk.Toplevel):
         self.result = None
         self.transient(parent)
         self.grab_set()
-        self.geometry("600x520")
+        self.geometry("600x550")
+        self.minsize(450, 450)
 
         ui_font, mono, _colors, icon_path = _resolve_fonts(parent)
         if icon_path:
@@ -503,7 +503,13 @@ class CreatePRDialog(tk.Toplevel):
                 self.iconbitmap(icon_path)
             except Exception:
                 pass
-        f = ttk.Frame(self, padding=18)
+
+        bar = ttk.Frame(self, padding=(18, 10))
+        bar.pack(fill="x", side="bottom")
+        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="创建", style="Accent.TButton", command=self._save).pack(side="right", padx=(0, 8))
+
+        f = ttk.Frame(self, padding=(18, 14, 18, 0))
         f.pack(fill="both", expand=True)
 
         ttk.Label(f, text="来源分支 (head)", font=(ui_font, 10, "bold")).pack(anchor="w")
@@ -527,11 +533,6 @@ class CreatePRDialog(tk.Toplevel):
         self.draft_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(f, text="作为草稿提交", variable=self.draft_var).pack(anchor="w")
 
-        bar = ttk.Frame(f)
-        bar.pack(fill="x", pady=(16, 0))
-        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
-        ttk.Button(bar, text="创建", style="Accent.TButton", command=self._save).pack(side="right", padx=(0, 8))
-
     def _save(self):
         t = self.title_var.get().strip()
         h = self.head_var.get().strip()
@@ -554,7 +555,8 @@ class CreateReleaseDialog(tk.Toplevel):
         self.result = None
         self.transient(parent)
         self.grab_set()
-        self.geometry("600x520")
+        self.geometry("600x550")
+        self.minsize(450, 450)
 
         ui_font, mono, _colors, icon_path = _resolve_fonts(parent)
         if icon_path:
@@ -562,7 +564,13 @@ class CreateReleaseDialog(tk.Toplevel):
                 self.iconbitmap(icon_path)
             except Exception:
                 pass
-        f = ttk.Frame(self, padding=18)
+
+        bar = ttk.Frame(self, padding=(18, 10))
+        bar.pack(fill="x", side="bottom")
+        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="发布", style="Accent.TButton", command=self._save).pack(side="right", padx=(0, 8))
+
+        f = ttk.Frame(self, padding=(18, 14, 18, 0))
         f.pack(fill="both", expand=True)
 
         ttk.Label(f, text="标签 (Tag) *", font=(ui_font, 10, "bold")).pack(anchor="w")
@@ -583,11 +591,6 @@ class CreateReleaseDialog(tk.Toplevel):
         ttk.Checkbutton(row, text="草稿", variable=self.draft_var).pack(side="left")
         self.pre_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row, text="预发布 (Pre-release)", variable=self.pre_var).pack(side="left", padx=(16, 0))
-
-        bar = ttk.Frame(f)
-        bar.pack(fill="x", pady=(16, 0))
-        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
-        ttk.Button(bar, text="发布", style="Accent.TButton", command=self._save).pack(side="right", padx=(0, 8))
 
     def _save(self):
         tag = self.tag_var.get().strip()
@@ -613,7 +616,7 @@ class OAuthDialog(tk.Toplevel):
         self._cancel = False
         self._info = None
         self._verification_url = ""
-        self._gen = 0           # 代次号：用于让旧轮询线程自动退出
+        self._gen = 0
         self.transient(parent)
         self.grab_set()
         self.geometry("520x360")
@@ -738,7 +741,6 @@ class OAuthDialog(tk.Toplevel):
             pass
 
     def _restart(self):
-        # 旧线程因代次不匹配自动退出
         self._gen += 1
         self._cancel = False
         self._safe_call(lambda: self.code_var.set(""))
@@ -757,8 +759,8 @@ class UploadProjectDialog(tk.Toplevel):
         self.result = None
         self.transient(parent)
         self.grab_set()
-        self.geometry("660x580")
-        self.resizable(False, False)
+        self.geometry("680x680")
+        self.minsize(580, 600)
 
         ui_font, _mono, _colors, icon_path = _resolve_fonts(parent)
         if icon_path:
@@ -767,7 +769,14 @@ class UploadProjectDialog(tk.Toplevel):
             except Exception:
                 pass
 
-        f = ttk.Frame(self, padding=18)
+        # 底部操作栏（先布局，确保始终可见）
+        bar = ttk.Frame(self, padding=(18, 10))
+        bar.pack(fill="x", side="bottom")
+        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="开始上传", style="Accent.TButton",
+                   command=self._save).pack(side="right", padx=(0, 8))
+
+        f = ttk.Frame(self, padding=(18, 14, 18, 0))
         f.pack(fill="both", expand=True)
 
         ttk.Label(f, text="本地目录 *",
@@ -809,16 +818,10 @@ class UploadProjectDialog(tk.Toplevel):
         self.msg_var = tk.StringVar(value="Initial commit")
         ttk.Entry(f, textvariable=self.msg_var).pack(fill="x", pady=(4, 12))
 
-        ttk.Label(f, style="Hint.TLabel", wraplength=600, justify="left",
+        ttk.Label(f, style="Hint.TLabel", justify="left",
                   text=("· 如果同名仓库已存在，会直接推送到该仓库\n"
                         "· 如果目录还不是 Git 仓库，会自动 git init\n"
                         "· 需要本机安装 Git 且在 PATH 中")).pack(anchor="w")
-
-        bar = ttk.Frame(f)
-        bar.pack(fill="x", side="bottom", pady=(16, 0))
-        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
-        ttk.Button(bar, text="开始上传", style="Accent.TButton",
-                   command=self._save).pack(side="right", padx=(0, 8))
 
         if default_dir:
             self._apply_dir_defaults(default_dir)
@@ -877,9 +880,8 @@ class UpdateDialog(tk.Toplevel):
         self.repo = repo
         self._downloaded = None
 
-        # 优先选稳定资产；若无，再放宽到 prerelease 资产
         self._asset = updater.pick_asset(self.info.assets, channel="stable") \
-            or updater.pick_asset(self.info.assets, channel="beta")
+                      or updater.pick_asset(self.info.assets, channel="beta")
 
         self.title("发现新版本")
         self.geometry("680x600")
@@ -897,7 +899,28 @@ class UpdateDialog(tk.Toplevel):
             except Exception:
                 pass
 
-        f = ttk.Frame(self, padding=16)
+        # 底部按钮栏
+        self._bar = ttk.Frame(self, padding=(16, 10))
+        self._bar.pack(fill="x", side="bottom")
+
+        self.primary_btn = ttk.Button(
+            self._bar,
+            text="下载并安装" if self._asset else "浏览器打开",
+            style="Accent.TButton",
+            command=self._on_primary,
+        )
+        self.primary_btn.pack(side="left")
+
+        ttk.Button(self._bar, text="浏览器打开",
+                   command=self._open_browser).pack(side="left", padx=(6, 0))
+
+        self.skip_btn = ttk.Button(self._bar, text="忽略此版本", command=self._skip)
+        self.skip_btn.pack(side="left", padx=(6, 0))
+
+        ttk.Button(self._bar, text="稍后提醒", command=self.destroy).pack(side="right")
+
+        # 主内容区
+        f = ttk.Frame(self, padding=(16, 14, 16, 0))
         f.pack(fill="both", expand=True)
 
         head = ttk.Frame(f)
@@ -929,7 +952,6 @@ class UpdateDialog(tk.Toplevel):
         notes.insert("1.0", self.info.body or "（无说明）")
         notes.configure(state="disabled")
 
-        # 资产信息
         asset_info = ttk.Frame(f)
         asset_info.pack(fill="x", pady=(0, 6))
         if self._asset:
@@ -943,30 +965,10 @@ class UpdateDialog(tk.Toplevel):
                       style="Danger.TLabel").pack(anchor="w")
 
         self.progress = ttk.Progressbar(f, mode="determinate", maximum=100)
+        self.speed_lbl = ttk.Label(f, text="", style="Hint.TLabel")
 
-        bar = ttk.Frame(f)
-        bar.pack(fill="x", pady=(12, 0))
-
-        self.primary_btn = ttk.Button(
-            bar,
-            text="下载并安装" if self._asset else "浏览器打开",
-            style="Accent.TButton",
-            command=self._on_primary,
-        )
-        self.primary_btn.pack(side="left")
-
-        ttk.Button(bar, text="浏览器打开",
-                   command=self._open_browser).pack(side="left", padx=(6, 0))
-
-        self.skip_btn = ttk.Button(bar, text="忽略此版本", command=self._skip)
-        self.skip_btn.pack(side="left", padx=(6, 0))
-
-        ttk.Button(bar, text="稍后提醒", command=self.destroy).pack(side="right")
-
-        self._bar = bar
         self.bind("<Escape>", lambda _e: self.destroy())
 
-    # ---- 行为 ----
     def _open_browser(self):
         if self.info.html_url:
             webbrowser.open(self.info.html_url)
@@ -1007,21 +1009,29 @@ class UpdateDialog(tk.Toplevel):
                 self.progress.pack(fill="x", pady=(4, 0), before=self._bar)
             except tk.TclError:
                 self.progress.pack(fill="x", pady=(4, 0))
+        if not self.speed_lbl.winfo_ismapped():
+            try:
+                self.speed_lbl.pack(fill="x", pady=(2, 0), before=self._bar)
+            except tk.TclError:
+                self.speed_lbl.pack(fill="x", pady=(2, 0))
+        self.speed_lbl.configure(text="正在连接…")
+
         asset = self._asset
         self.app._status(f"正在下载 {asset.get('name')}…")
 
         def work():
             return self.api.download_asset(
                 self.repo, asset, dest,
-                on_progress=lambda p: self.app.after(
-                    0, lambda v=p: self._update_progress(v)),
+                on_progress=lambda p, speed=0: self.app.after(
+                    0, lambda v=p, s=speed: self._update_progress(v, s)),
             )
 
         def ok(path):
             if not self.winfo_exists():
                 return
             self._downloaded = path
-            self._update_progress(1.0)
+            self._update_progress(1.0, 0)
+            self.speed_lbl.configure(text="下载完成")
             self.primary_btn.configure(state="normal", text="立即安装")
             self.app._status(f"下载完成：{path}")
             if messagebox.askyesno(
@@ -1037,15 +1047,103 @@ class UpdateDialog(tk.Toplevel):
                                        text="下载并安装" if self._asset else "浏览器打开")
             try:
                 self.progress.pack_forget()
+                self.speed_lbl.pack_forget()
             except Exception:
                 pass
             messagebox.showerror("下载失败", str(e), parent=self)
 
         self.app.run_async(work, ok, err)
 
-    def _update_progress(self, p):
+    def _update_progress(self, p, speed=0):
         try:
             if self.winfo_exists():
                 self.progress.configure(value=max(0, min(100, p * 100)))
+                if speed > 0:
+                    self.speed_lbl.configure(
+                        text=f"{_fmt_bytes(speed)}/s  ·  已完成 {p * 100:.1f}%")
         except tk.TclError:
             pass
+
+
+class AssetPickerDialog(tk.Toplevel):
+    """当 Release 包含多个文件时，让用户选择需要下载哪些。"""
+
+    def __init__(self, parent, repo, assets):
+        super().__init__(parent)
+        self.title("选择要下载的文件")
+        self.result = None
+        self.transient(parent)
+        self.grab_set()
+        self.geometry("680x480")
+        self.minsize(520, 360)
+
+        ui_font, _mono, colors, icon_path = _resolve_fonts(parent)
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
+
+        bar = ttk.Frame(self, padding=(16, 10))
+        bar.pack(fill="x", side="bottom")
+        ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="下载所选", style="Accent.TButton",
+                   command=self._ok).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+        f = ttk.Frame(self, padding=(16, 14, 16, 0))
+        f.pack(fill="both", expand=True)
+
+        ttk.Label(f, text=f"{repo}", font=(ui_font, 11, "bold")).pack(anchor="w")
+        ttk.Label(
+            f,
+            text=f"该 Release 共 {len(assets)} 个文件。按住 Ctrl / Shift 可多选，双击可立即下载。",
+            style="Hint.TLabel",
+        ).pack(anchor="w", pady=(2, 8))
+
+        body = ttk.Frame(f)
+        body.pack(fill="both", expand=True)
+
+        self.listbox = tk.Listbox(
+            body, selectmode="extended", exportselection=False,
+            font=(ui_font, 10),
+            bg=colors.get("ENTRY_BG", "#fff"),
+            fg=colors.get("FG", "#000"),
+            selectbackground=colors.get("ACCENT", "#0969da"),
+            selectforeground="white",
+            relief="flat", bd=0, highlightthickness=0,
+        )
+        vs = ttk.Scrollbar(body, orient="vertical", command=self.listbox.yview)
+        self.listbox.configure(yscrollcommand=vs.set)
+        self.listbox.pack(side="left", fill="both", expand=True)
+        vs.pack(side="right", fill="y")
+        self.listbox.bind("<Double-1>", lambda _e: self._ok())
+
+        self._assets = list(assets)
+        for a in self._assets:
+            size = _fmt_bytes(a.get("size", 0))
+            self.listbox.insert("end", f"{a.get('name', '?')}    ({size})")
+
+        if self._assets:
+            self.listbox.selection_set(0)
+
+        tools = ttk.Frame(f)
+        tools.pack(fill="x", pady=(8, 0))
+        ttk.Button(tools, text="全选",
+                   command=lambda: self.listbox.selection_set(0, "end")).pack(side="left")
+        ttk.Button(tools, text="反选", command=self._invert).pack(side="left", padx=(6, 0))
+
+    def _invert(self):
+        sel = set(self.listbox.curselection())
+        self.listbox.selection_clear(0, "end")
+        for i in range(self.listbox.size()):
+            if i not in sel:
+                self.listbox.selection_set(i)
+
+    def _ok(self):
+        sel = self.listbox.curselection()
+        if not sel:
+            messagebox.showinfo("提示", "请选择至少一个文件", parent=self)
+            return
+        self.result = [self._assets[i] for i in sel]
+        self.destroy()

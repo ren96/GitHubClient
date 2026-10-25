@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import threading
 import time
 import sqlite3
 from typing import Optional
@@ -206,36 +207,40 @@ class ConfigStore:
 
 
 class Cache:
+    """SQLite 缓存，使用线程本地连接 + WAL 以降低连接开销。"""
+
     def __init__(self):
         self.dir = _config_dir()
         os.makedirs(self.dir, exist_ok=True)
         self.path = os.path.join(self.dir, "cache.db")
+        self._local = threading.local()
         self._init_db()
 
+    def _conn(self):
+        con = getattr(self._local, "con", None)
+        if con is None:
+            con = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
+            try:
+                con.execute("PRAGMA journal_mode=WAL")
+                con.execute("PRAGMA synchronous=NORMAL")
+            except Exception:
+                pass
+            self._local.con = con
+        return con
+
     def _init_db(self):
-        con = None
         try:
-            con = sqlite3.connect(self.path)
+            con = self._conn()
             con.execute(
                 "CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT, t REAL)")
             con.commit()
         except Exception:
             pass
-        finally:
-            if con is not None:
-                try:
-                    con.close()
-                except Exception:
-                    pass
-
-    def _connect(self):
-        return sqlite3.connect(self.path, timeout=10)
 
     def get(self, key: str, max_age: int = 600):
-        con = None
         try:
-            con = self._connect()
-            row = con.execute("SELECT v, t FROM kv WHERE k=?", (key,)).fetchone()
+            row = self._conn().execute(
+                "SELECT v, t FROM kv WHERE k=?", (key,)).fetchone()
             if not row:
                 return None
             v, t = row
@@ -244,41 +249,21 @@ class Cache:
             return json.loads(v)
         except Exception:
             return None
-        finally:
-            if con is not None:
-                try:
-                    con.close()
-                except Exception:
-                    pass
 
     def set(self, key: str, value):
-        con = None
         try:
-            con = self._connect()
+            con = self._conn()
             with con:
                 con.execute(
                     "INSERT OR REPLACE INTO kv VALUES (?, ?, ?)",
                     (key, json.dumps(value, default=str), time.time()))
         except Exception:
             pass
-        finally:
-            if con is not None:
-                try:
-                    con.close()
-                except Exception:
-                    pass
 
     def delete(self, key: str):
-        con = None
         try:
-            con = self._connect()
+            con = self._conn()
             with con:
                 con.execute("DELETE FROM kv WHERE k=?", (key,))
         except Exception:
             pass
-        finally:
-            if con is not None:
-                try:
-                    con.close()
-                except Exception:
-                    pass

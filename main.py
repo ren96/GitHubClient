@@ -7,6 +7,7 @@ set_windows_app_id()
 import logging
 import os
 import threading
+import time
 from app import GitHubApp
 from utils import _setup_logging
 
@@ -40,9 +41,10 @@ def _load_tray_image(path):
     return img
 
 
-def _start_tray(app: GitHubApp):
+def _start_tray(app: GitHubApp) -> bool:
+    """尝试启动托盘；返回是否成功。失败时关闭窗口将直接退出。"""
     if not TRAY_OK:
-        return
+        return False
     try:
         img = PILImage.new("RGBA", (64, 64), (36, 41, 47, 255))
 
@@ -52,30 +54,45 @@ def _start_tray(app: GitHubApp):
             except Exception as e:
                 logging.warning(f"托盘图标加载失败: {e}")
 
-        icon_ref = {"icon": None}
-
         def _show():
-            app.after(0, app.deiconify)
+            try:
+                app.after(0, app.deiconify)
+                app.after(0, app.lift)
+            except Exception:
+                pass
 
         def _quit():
-            if icon_ref["icon"]:
-                try:
-                    icon_ref["icon"].stop()
-                except Exception:
-                    pass
-            app.after(0, app.destroy)
+            try:
+                if getattr(app, "_tray_icon", None) is not None:
+                    app._tray_icon.stop()
+            except Exception:
+                pass
+            try:
+                app.after(0, app.destroy)
+            except Exception:
+                pass
 
         icon = pystray.Icon(
             "github-client", img, "GitHub 客户端",
             menu=pystray.Menu(
-                pystray.MenuItem("显示", _show),
+                pystray.MenuItem("显示", _show, default=True),
                 pystray.MenuItem("退出", _quit),
             ))
-        icon_ref["icon"] = icon
-        threading.Thread(target=icon.run, daemon=True).start()
+
+        def _runner():
+            try:
+                icon.run()
+            except Exception:
+                logging.exception("托盘运行时错误")
+
+        threading.Thread(target=_runner, daemon=True).start()
+        # 给后台线程 300ms 检查是否可见；不可见也不视为失败（部分平台 API 延迟）
+        time.sleep(0.3)
         app._tray_icon = icon
+        return True
     except Exception:
         logging.exception("托盘启动失败")
+        return False
 
 
 def main():
@@ -99,10 +116,12 @@ def main():
         except Exception:
             pass
 
+    tray_ok = _start_tray(app)
+
     def on_close():
         save_geometry()
-        icon = getattr(app, "_tray_icon", None)
-        if icon is not None:
+        # 仅当托盘成功时才允许最小化到托盘；否则直接退出，避免窗口无法恢复
+        if tray_ok and getattr(app, "_tray_icon", None) is not None:
             try:
                 app.withdraw()
                 return
@@ -111,7 +130,6 @@ def main():
         app.destroy()
 
     app.protocol("WM_DELETE_WINDOW", on_close)
-    _start_tray(app)
     try:
         app.mainloop()
     except KeyboardInterrupt:

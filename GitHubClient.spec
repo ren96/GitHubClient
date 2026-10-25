@@ -3,8 +3,6 @@ import os
 
 from PyInstaller.utils.hooks import copy_metadata
 
-block_cipher = None
-
 # ---------- 数据文件 ----------
 _datas = []
 if os.path.exists('tubiao/tubiao.ico'):
@@ -25,22 +23,36 @@ _hidden = [
     'pystray._win32',
     'pystray._darwin',
     'pystray._xorg',
+
     # keyring 各平台后端
     'keyring.backends.Windows',
     'keyring.backends.macOS',
     'keyring.backends.SecretService',
     'keyring.backends.kwallet',
+
     # Windows 凭据依赖
     'win32ctypes.pywin32',
+
     # markdown 扩展（repo_detail.py 动态传入字符串，静态分析扫不到）
     'markdown.extensions.fenced_code',
     'markdown.extensions.tables',
     'markdown.extensions.extra',
     'markdown.extensions.nl2br',
+
     # README 渲染库
     'tkhtmlview',
-    # Pillow 的 Tkinter 集成
+
+    # Pillow 的 Tkinter 集成 + 图片插件
     'PIL._tkinter_finder',
+    'PIL.Image',
+    'PIL.ImageTk',
+    'PIL._imagingtk',
+    'PIL.IcoImagePlugin',
+    'PIL.PngImagePlugin',
+
+    # sqlite3（config.py 的 Cache 使用）
+    '_sqlite3',
+    'sqlite3',
 ]
 
 # ---------- Analysis ----------
@@ -56,11 +68,10 @@ a = Analysis(
     excludes=['plyer', 'win10toast', 'tkinter.test', 'unittest'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure, a.zipped_data)
 
 # ---------- EXE ----------
 exe = EXE(

@@ -13,7 +13,8 @@ class DownloadTask:
         self.asset = asset
         self.dest = dest
         self.progress = 0.0
-        self.status = "等待中"  # 等待中 / 下载中 / 暂停 / 失败 / 完成
+        self.speed = 0.0
+        self.status = "等待中"  # 等待中 / 下载中 / 已暂停 / 失败 / 完成
         self.error = ""
         self.path = ""
         self.size = asset.get("size", 0)
@@ -55,8 +56,9 @@ class DownloadQueueWindow(tk.Toplevel):
         self.tree = ttk.Treeview(
             body, columns=("name", "size", "status", "progress", "error"),
             show="headings")
-        for c, h, w in [("name", "文件名", 260), ("size", "大小", 80),
-                        ("status", "状态", 100), ("progress", "进度", 100), ("error", "错误", 160)]:
+        for c, h, w in [("name", "文件名", 240), ("size", "大小", 80),
+                        ("status", "状态", 90), ("progress", "进度 / 速度", 160),
+                        ("error", "错误", 160)]:
             self.tree.heading(c, text=h)
             self.tree.column(c, width=w, anchor="w")
         vs = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
@@ -108,6 +110,12 @@ class DownloadQueueWindow(tk.Toplevel):
     def _toggle_pause(self):
         self._paused = not self._paused
         self.btn_pause.configure(text="▶ 继续全部" if self._paused else "⏸ 暂停全部")
+        with self._lock:
+            for t in self.tasks:
+                if self._paused and t.status == "等待中":
+                    t.status = "已暂停"
+                elif not self._paused and t.status == "已暂停":
+                    t.status = "等待中"
         self._schedule_refresh()
 
     def _on_double_click(self, _e):
@@ -137,8 +145,11 @@ class DownloadQueueWindow(tk.Toplevel):
 
             for i, t in enumerate(tasks_snapshot):
                 size_str = _fmt_bytes(t.size) if t.size else "-"
+                prog_str = f"{int(t.progress * 100)}%"
+                if t.status == "下载中" and t.speed > 0:
+                    prog_str += f"  {_fmt_bytes(t.speed)}/s"
                 self.tree.insert("", "end", iid=str(i), values=(
-                    t.name, size_str, t.status, f"{int(t.progress * 100)}%", t.error,
+                    t.name, size_str, t.status, prog_str, t.error,
                 ), tags=("odd",) if i % 2 else ("even",))
         except tk.TclError:
             pass
@@ -164,11 +175,13 @@ class DownloadQueueWindow(tk.Toplevel):
             with self._lock:
                 t.status = "下载中"
                 t.error = ""
+                t.speed = 0.0
             self._schedule_refresh()
 
-            def _prog(p, task=t):
+            def _prog(p, speed=0, task=t):
                 with self._lock:
                     task.progress = p
+                    task.speed = speed
                 self._schedule_refresh()
 
             try:
@@ -179,11 +192,13 @@ class DownloadQueueWindow(tk.Toplevel):
                 with self._lock:
                     t.status = "完成"
                     t.progress = 1.0
+                    t.speed = 0.0
                     t.path = path
             except Exception as e:
                 with self._lock:
                     t.status = "失败"
                     t.error = str(e)[:100]
+                    t.speed = 0.0
             self._schedule_refresh()
 
     def _retry_failed(self):
@@ -192,6 +207,7 @@ class DownloadQueueWindow(tk.Toplevel):
                 if t.status == "失败":
                     t.status = "等待中"
                     t.progress = 0.0
+                    t.speed = 0.0
                     t.error = ""
         self._schedule_refresh()
 

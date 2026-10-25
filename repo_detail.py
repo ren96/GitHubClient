@@ -93,9 +93,9 @@ class RepoDetailWindow(tk.Toplevel):
             self.app._repo_cache[self.repo] = data
             if topics is not None:
                 self.app.run_async(lambda: self.app.api.set_topics(self.repo, topics),
-                                   lambda _: self.app._status("仓库与 Topics 已更新"))
+                                   lambda _: self.app._status("仓库与 Topics 已更新", kind="ok"))
             else:
-                self.app._status("仓库已更新")
+                self.app._status("仓库已更新", kind="ok")
 
         self.app.run_async(lambda: self.app.api.update_repo(self.repo, **fields), ok)
 
@@ -118,7 +118,7 @@ class RepoDetailWindow(tk.Toplevel):
 
     def _watch(self):
         self.app.run_async(lambda: self.app.api.watch(self.repo),
-                           lambda _: self.app._status("已 Watch"))
+                           lambda _: self.app._status("已 Watch", kind="ok"))
 
     def _fork(self):
         def ok(res):
@@ -144,7 +144,7 @@ class RepoDetailWindow(tk.Toplevel):
                 return
 
             def done(pr):
-                self.app._status(f"PR 已创建：#{pr['number']}")
+                self.app._status(f"PR 已创建：#{pr['number']}", kind="ok")
                 webbrowser.open(pr["html_url"])
 
             self.app.run_async(lambda: self.app.api.create_pull(self.repo, **dlg.result), done)
@@ -158,7 +158,7 @@ class RepoDetailWindow(tk.Toplevel):
             return
 
         def done(rel):
-            self.app._status(f"Release 已发布：{rel['tag_name']}")
+            self.app._status(f"Release 已发布：{rel['tag_name']}", kind="ok")
             self._load_releases()
 
         self.app.run_async(lambda: self.app.api.create_release(self.repo, **dlg.result), done)
@@ -295,7 +295,9 @@ class RepoDetailWindow(tk.Toplevel):
         self.ref_var = tk.StringVar(value=self.data.get("default_branch", "main"))
         self.ref_combo = ttk.Combobox(top, textvariable=self.ref_var, width=30)
         self.ref_combo.pack(side="left", padx=(4, 6))
-        ttk.Button(top, text="加载", command=self._load_tree).pack(side="left")
+        ttk.Button(top, text="加载顶层", command=lambda: self._load_tree(False)).pack(side="left")
+        ttk.Button(top, text="递归全部", command=lambda: self._load_tree(True)).pack(side="left", padx=(6, 0))
+
         body = ttk.Frame(tab)
         body.pack(fill="both", expand=True, pady=(8, 0))
         self.tree_view = ttk.Treeview(body, columns=("type", "path"), show="headings")
@@ -315,9 +317,9 @@ class RepoDetailWindow(tk.Toplevel):
                 self.ref_combo["values"] = [b["name"] for b in branches]
 
         self.app.run_async(lambda: self.app.api.list_branches(self.repo), fill_refs)
-        self._load_tree()
+        self._load_tree(False)
 
-    def _load_tree(self):
+    def _load_tree(self, recursive=False):
         ref = self.ref_var.get().strip() or self.data.get("default_branch")
 
         def ok(tree):
@@ -331,7 +333,8 @@ class RepoDetailWindow(tk.Toplevel):
                                       values=(it["type"], it["path"]),
                                       tags=("odd",) if i % 2 else ("even",))
 
-        self.app.run_async(lambda: self.app.api.get_tree(self.repo, ref), ok)
+        self.app.run_async(
+            lambda: self.app.api.get_tree(self.repo, ref, recursive=recursive), ok)
 
     def _open_file(self, _e):
         sel = self.tree_view.selection()
@@ -517,7 +520,7 @@ class RepoDetailWindow(tk.Toplevel):
         dest = filedialog.askdirectory(title="选择保存目录", initialdir=self.app._initial_dir(), parent=self)
         if not dest: return
         self.app._enqueue_download(self.repo, asset, dest)
-        self.app._status(f"已加入下载队列：{asset['name']}")
+        self.app._status(f"已加入下载队列：{asset['name']}", kind="ok")
 
     def _download_all(self, release):
         assets = release.get("assets") or []
@@ -526,7 +529,7 @@ class RepoDetailWindow(tk.Toplevel):
         if not dest: return
         for a in assets:
             self.app._enqueue_download(self.repo, a, dest)
-        self.app._status(f"已加入下载队列：{len(assets)} 个文件")
+        self.app._status(f"已加入下载队列：{len(assets)} 个文件", kind="ok")
 
     def _build_actions(self, nb):
         tab = ttk.Frame(nb, padding=10)
@@ -570,7 +573,7 @@ class RepoDetailWindow(tk.Toplevel):
         self.app._status("正在下载日志...")
 
         def ok(path):
-            self.app._status("日志下载完成")
+            self.app._status("日志下载完成", kind="ok")
             reveal_in_folder(path)
 
         self.app.run_async(lambda: self.app.api.download_action_logs(self.repo, run_id, dest), ok)
