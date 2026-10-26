@@ -8,7 +8,7 @@ import zipfile
 from urllib.parse import quote
 
 import requests
-from utils import RateLimitError
+from utils import RateLimitError, no_window_kwargs
 
 API = "https://api.github.com"
 GRAPHQL = "https://api.github.com/graphql"
@@ -605,7 +605,7 @@ class GitHubAPI:
             proc = subprocess.Popen(
                 cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
                 text=True, bufsize=1, encoding="utf-8", errors="replace",
-                env=self._git_env())
+                env=self._git_env(), **no_window_kwargs())
         except FileNotFoundError:
             raise RuntimeError("找不到 git 命令")
         for line in proc.stderr:
@@ -625,7 +625,7 @@ class GitHubAPI:
         cmd = ["git"] + self._git_proxy_args() + self._git_auth_args() + ["-C", local_path, "pull"]
         proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
                                 text=True, encoding="utf-8", errors="replace",
-                                env=self._git_env())
+                                env=self._git_env(), **no_window_kwargs())
         out, err = proc.communicate()
         if proc.returncode != 0:
             raise RuntimeError(f"git pull 失败：{(err or '').strip()}")
@@ -665,14 +665,14 @@ class GitHubAPI:
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     text=True, encoding="utf-8", errors="replace",
-                    env=git_env)
+                    env=git_env, **no_window_kwargs())
                 out, err = proc.communicate()
                 if check and proc.returncode != 0:
                     msg = (err or out or "").strip()
                     raise RuntimeError(f"git {' '.join(args)} 失败：{msg[:500]}")
                 return out, err
             else:
-                proc = subprocess.run(cmd, env=git_env)
+                proc = subprocess.run(cmd, env=git_env, **no_window_kwargs())
                 if check and proc.returncode != 0:
                     raise RuntimeError(f"git {' '.join(args)} 失败（exit {proc.returncode}）")
 
@@ -727,7 +727,7 @@ class GitHubAPI:
         proc = subprocess.Popen(
             push_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", bufsize=1,
-            env=git_env)
+            env=git_env, **no_window_kwargs())
         assert proc.stdout is not None
         output_lines = []
         for line in proc.stdout:

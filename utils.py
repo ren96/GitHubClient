@@ -8,6 +8,17 @@ import tkinter as tk
 from tkinter import ttk
 
 
+# Windows：隐藏外部进程控制台窗口（PyInstaller --noconsole 打包后必备）
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def no_window_kwargs() -> dict:
+    """返回用于隐藏子进程控制台窗口的 subprocess 参数（跨平台安全）。"""
+    if sys.platform == "win32":
+        return {"creationflags": _CREATE_NO_WINDOW}
+    return {}
+
+
 def get_base_dir():
     # ---- 修复：PyInstaller 打包后资源位于 _MEIPASS ----
     # - onefile 模式：解压到临时目录 sys._MEIPASS
@@ -157,13 +168,29 @@ def open_path_in_os(path: str):
 
 
 def open_in_vscode(path: str):
+    """用 VS Code 打开路径；Windows 下静默调用，避免闪黑色命令框。"""
     try:
-        subprocess.Popen(["code", path], shell=(sys.platform == "win32"))
+        if sys.platform == "win32":
+            # code 在 Windows 上通常是 code.cmd，需要走 cmd /c；
+            # 加上 CREATE_NO_WINDOW 后不会再弹出控制台窗口
+            subprocess.Popen(
+                ["cmd", "/c", "code", path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                **no_window_kwargs(),
+            )
+        else:
+            subprocess.Popen(
+                ["code", path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
     except FileNotFoundError:
         raise RuntimeError("未找到 code 命令，请确认已安装 VS Code 并加入 PATH")
 
 
 def open_terminal(path: str):
+    # 终端是「特意」要弹出来的，所以这里不加 no_window_kwargs
     if sys.platform == "win32":
         try:
             subprocess.Popen(["wt", "-d", path])
@@ -242,6 +269,7 @@ def notify_desktop(title: str, msg: str):
                 env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                **no_window_kwargs(),
             )
 
         elif sys.platform == "darwin":
@@ -249,21 +277,28 @@ def notify_desktop(title: str, msg: str):
             subprocess.Popen(
                 ["osascript", "-e", apple_script, msg, title],
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                **no_window_kwargs(),
             )
 
         else:
             try:
                 subprocess.Popen(["notify-send", title, msg],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL,
+                                 **no_window_kwargs())
             except FileNotFoundError:
                 try:
                     subprocess.Popen(["zenity", "--info", "--title", title, "--text", msg],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL,
+                                     **no_window_kwargs())
                 except FileNotFoundError:
                     try:
                         subprocess.Popen(["kdialog", "--title", title, "--msgbox", msg],
-                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                         stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL,
+                                         **no_window_kwargs())
                     except FileNotFoundError:
                         logging.warning("Linux 下未找到任何可用的通知程序 (notify-send / zenity / kdialog)")
     except Exception as e:
