@@ -55,7 +55,27 @@ class PRDetailWindow(tk.Toplevel):
         self.merge_btn.pack(side="left", padx=(6, 0))
 
         ttk.Button(bar, text="✖️ 关闭", command=self._close).pack(side="left", padx=(6, 0))
+
+        try:
+            app.register_theme_listener(self, self._apply_theme)
+        except Exception:
+            pass
+
         self.reload()
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        c = self.app.colors
+        try:
+            self.txt.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+            self.diff_txt.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+            self.app._tag_tree(self.files_tree)
+        except tk.TclError:
+            pass
 
     def _build_overview(self, nb):
         tab = ttk.Frame(nb, padding=10)

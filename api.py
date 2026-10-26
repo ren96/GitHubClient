@@ -56,7 +56,7 @@ class GitHubAPI:
             if r.status_code == 304:
                 if cached_body is not None:
                     return cached_body
-                # 缓存丢失（如被清理/首次带 ETag），去掉 If-None-Match 后重试
+                # 缓存丢失：去掉 If-None-Match 后重试；重试用尽则显式报错
                 headers = kw.get("headers") or {}
                 headers.pop("If-None-Match", None)
                 if headers:
@@ -65,6 +65,7 @@ class GitHubAPI:
                     kw.pop("headers", None)
                 if attempt < retries - 1:
                     continue
+                raise RuntimeError("HTTP 304 但本地缓存缺失，请刷新或清理缓存")
 
             if r.status_code in (403, 429) and r.headers.get("X-RateLimit-Remaining") == "0":
                 reset = int(r.headers.get("X-RateLimit-Reset", "0"))
@@ -356,6 +357,9 @@ class GitHubAPI:
                             on_progress(min(1.0, done / total), speed)
                         except TypeError:
                             on_progress(min(1.0, done / total))
+            # 完整性校验
+            if total and done != total:
+                raise RuntimeError(f"下载不完整：{done}/{total} 字节")
             os.replace(tmp, target)
             return target
         finally:
@@ -531,8 +535,12 @@ class GitHubAPI:
                     if not (p == base or p.startswith(base + os.sep)):
                         raise RuntimeError(f"压缩包含非法路径：{m}")
 
-                # 找到所有条目共同的顶层目录（GitHub zipball 通常只有一个）
-                tops = {m.split("/", 1)[0] for m in members if m and not m.startswith("/")}
+                # 过滤 __MACOSX 后，找到共同顶层目录（GitHub zipball 通常只有一个）
+                tops = {
+                    m.split("/", 1)[0]
+                    for m in members
+                    if m and not m.startswith("/") and not m.startswith("__MACOSX")
+                }
                 tops.discard("")
                 if len(tops) != 1:
                     raise RuntimeError("压缩包结构异常（找不到唯一顶层目录）")

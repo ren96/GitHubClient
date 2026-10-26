@@ -4,6 +4,8 @@ import time
 import logging
 import re
 import subprocess
+import tkinter as tk
+from tkinter import ttk
 
 
 def get_base_dir():
@@ -266,3 +268,19 @@ def notify_desktop(title: str, msg: str):
                         logging.warning("Linux 下未找到任何可用的通知程序 (notify-send / zenity / kdialog)")
     except Exception as e:
         logging.warning(f"发送桌面通知失败: {e}")
+
+
+class SymbolCheckbutton(ttk.Checkbutton):
+    """
+    自定义的纯文本复选框，用 '√' 和 '×' 替代原生的勾选框指示器。
+    """
+    def __init__(self, master, text="", variable=None, **kwargs):
+        self._orig_text = text
+        self._var = variable or tk.BooleanVar()
+        super().__init__(master, text=text, variable=self._var, **kwargs)
+        self._var.trace_add("write", self._update_text)
+        self._update_text()
+
+    def _update_text(self, *args):
+        symbol = "√" if self._var.get() else "×"
+        self.configure(text=f"{symbol} {self._orig_text}")

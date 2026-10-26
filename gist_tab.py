@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import webbrowser
-from utils import _rel_time
+from utils import _rel_time, SymbolCheckbutton
 
 
 class GistTab(ttk.Frame):
@@ -28,6 +28,24 @@ class GistTab(ttk.Frame):
             widths=(500, 90, 90, 180))
         self.tree.bind("<Double-1>", self._open_gist)
         self.tree.bind("<Button-3>", self._context_menu)
+
+        # 注册主题监听（Treeview 颜色刷新）
+        try:
+            app.register_theme_listener(self, self._apply_theme)
+        except Exception:
+            pass
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        try:
+            for tree in self.app._iter_trees(self):
+                self.app._tag_tree(tree)
+        except tk.TclError:
+            pass
 
     def load(self):
         def ok(items):
@@ -157,12 +175,15 @@ class GistTab(ttk.Frame):
 class GistDialog(tk.Toplevel):
     def __init__(self, parent, gist_data=None):
         super().__init__(parent)
+        # parent 就是 app（GistTab 里调用是 GistDialog(self.app)）
+        self.app = parent
         self.title("编辑 Gist" if gist_data else "新建 Gist")
         self.result = None
         self.transient(parent)
         self.grab_set()
         self.geometry("680x520")
         colors = parent.colors
+        self.colors = colors
         try:
             self.iconbitmap(parent.icon_path)
         except Exception:
@@ -198,13 +219,30 @@ class GistDialog(tk.Toplevel):
                 self.text.insert("1.0", first.get("content") or "")
 
         self.public_var = tk.BooleanVar(value=bool(gist_data.get("public")) if gist_data else False)
-        ttk.Checkbutton(f, text="公开", variable=self.public_var).pack(anchor="w")
+        SymbolCheckbutton(f, text="公开", variable=self.public_var).pack(anchor="w")
 
         bar = ttk.Frame(f)
         bar.pack(fill="x", pady=(10, 0))
         ttk.Button(bar, text="取消", command=self.destroy).pack(side="right")
         ttk.Button(bar, text="保存", style="Accent.TButton",
                    command=self._save).pack(side="right", padx=(0, 8))
+
+        try:
+            self.app.register_theme_listener(self, self._apply_theme)
+        except Exception:
+            pass
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        c = self.app.colors if hasattr(self.app, "colors") else self.colors
+        try:
+            self.text.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+        except tk.TclError:
+            pass
 
     def _save(self):
         name = self.name_var.get().strip()

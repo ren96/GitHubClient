@@ -11,7 +11,7 @@ from typing import Optional
 
 from utils import (
     _fmt_time, _rel_time, _fmt_bytes, RateLimitError, get_base_dir, detect_system_theme,
-    open_path_in_os, open_in_vscode, open_terminal, notify_desktop
+    open_path_in_os, open_in_vscode, open_terminal, notify_desktop, SymbolCheckbutton
 )
 from config import ConfigStore, Cache, KEYRING_OK
 from api import GitHubAPI
@@ -25,6 +25,7 @@ from gist_tab import GistTab
 from command_palette import CommandPalette
 from download_queue import DownloadQueueWindow, DownloadTask
 from version import __version__ as APP_VERSION
+from about import AboutDialog
 import updater
 
 REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
@@ -119,8 +120,12 @@ class GitHubApp(tk.Tk):
 
         self._shortcuts_win = None
         self._cmd_palette = None
+        self._about_win = None
 
         self._update_check_launched = False
+
+        # 主题广播监听器（子窗口注册回调，主题切换时统一刷新）
+        self._theme_listeners: list = []
 
         self.cfg = ConfigStore()
         self.cache = Cache()
@@ -149,6 +154,26 @@ class GitHubApp(tk.Tk):
             except Exception:
                 pass
 
+    # ---------- 主题广播机制 ----------
+    def register_theme_listener(self, widget, callback):
+        """子窗口注册：主题切换时调用 callback() 刷新自己的 tk 控件颜色。"""
+        try:
+            self._theme_listeners.append((widget, callback))
+        except Exception:
+            pass
+
+    def _broadcast_theme_change(self):
+        live = []
+        for widget, cb in self._theme_listeners:
+            try:
+                if widget.winfo_exists():
+                    cb()
+                    live.append((widget, cb))
+            except Exception:
+                pass
+        self._theme_listeners = live
+
+    # ---------- 基础设置 ----------
     def _setup_icon(self):
         base_dir = get_base_dir()
         self.icon_path = os.path.join(base_dir, "tubiao", "tubiao.ico")
@@ -291,9 +316,21 @@ class GitHubApp(tk.Tk):
         style.configure("TRadiobutton", background=BG, font=(self.ui_font, self.font_size))
         style.configure("TSeparator", background=CARD_BORDER)
 
+        # 隐藏系统自带的复选框指示器
+        style.layout("TCheckbutton", [
+            ('Checkbutton.padding', {'sticky': 'nswe', 'children': [
+                ('Checkbutton.focus', {'side': 'left', 'sticky': 'w', 'children': [
+                    ('Checkbutton.label', {'sticky': 'nswe'})
+                ]})
+            ]})
+        ])
+
         for tree in self._iter_trees(self):
             self._tag_tree(tree)
+
         self._refresh_login_colors()
+        # 通知所有已注册的子窗口
+        self._broadcast_theme_change()
 
     def _refresh_login_colors(self):
         try:
@@ -303,6 +340,12 @@ class GitHubApp(tk.Tk):
             accent = getattr(self, "_login_accent", None)
             if accent is not None and accent.winfo_exists():
                 accent.configure(bg=self.colors["ACCENT"])
+            logo = getattr(self, "_login_logo_label", None)
+            if logo is not None and logo.winfo_exists():
+                logo.configure(bg=self.colors["BG"])
+            fallback = getattr(self, "_login_logo_fallback", None)
+            if fallback is not None and fallback.winfo_exists():
+                fallback.configure(bg=self.colors["BG"])
         except Exception:
             pass
 
@@ -336,8 +379,6 @@ class GitHubApp(tk.Tk):
         self._setup_theme(self._resolve_theme(nxt))
         for tree in self._iter_trees(self):
             self._tag_tree(tree)
-        if hasattr(self, "theme_btn"):
-            self.theme_btn.configure(text={"auto": "🌓", "light": "🌙", "dark": "☀️"}[nxt])
         self._status(f"主题：{nxt}")
 
     def run_async(self, fn, on_ok, on_err=None):
@@ -422,18 +463,11 @@ class GitHubApp(tk.Tk):
 
             def _key(v):
                 s = str(v[0]).strip()
-                # 1) 提取第一个连续数字串（可含小数点），如 "v1.2.3" → (1,2,3)
-                m = re.search(r'\d+(?:\.\d+)*', s)
-                if m:
+                # 提取所有数字串，统一 float 元组比较，避免 int/float/str 混比崩溃
+                nums = re.findall(r"\d+(?:\.\d+)?", s)
+                if nums:
                     try:
-                        return (0, tuple(int(x) for x in m.group().split(".")))
-                    except ValueError:
-                        pass
-                # 2) 否则按首数字单值比较（"12 天前" → 12）
-                m2 = re.search(r'\d+(?:\.\d+)?', s)
-                if m2:
-                    try:
-                        return (0, (float(m2.group()),))
+                        return (0, tuple(float(x) for x in nums))
                     except ValueError:
                         pass
                 return (1, s.lower())
@@ -456,9 +490,17 @@ class GitHubApp(tk.Tk):
 
         def on_release(e):
             new_w = [tree.column(c, "width") for c in cols]
-            if not hasattr(self.cfg, "col_widths"): self.cfg.col_widths = {}
+            if not hasattr(self.cfg, "col_widths"):
+                self.cfg.col_widths = {}
             self.cfg.col_widths[name] = new_w
-            self.cfg.save()
+            # debounce：避免拖动列宽时疯狂写盘
+            prev = getattr(tree, "_width_save_after", None)
+            if prev:
+                try:
+                    tree.after_cancel(prev)
+                except Exception:
+                    pass
+            tree._width_save_after = tree.after(600, self.cfg.save)
 
         tree.bind("<ButtonRelease-1>", on_release, add="+")
 
@@ -492,6 +534,17 @@ class GitHubApp(tk.Tk):
                         logging.exception("tree 重试失败")
             tree.bind("<Double-1>", _on_retry, add="+")
             tree._retry_bound = True
+
+    def _make_action_bar(self, parent, primary=None, secondary=None):
+        """统一操作栏：主操作（强调色）靠左，次操作靠右。"""
+        bar = ttk.Frame(parent)
+        bar.pack(fill="x", pady=(12, 0))
+        for text, cmd in (primary or []):
+            ttk.Button(bar, text=text, style="Accent.TButton",
+                       command=cmd).pack(side="left", padx=(0, 6))
+        for text, cmd in (secondary or []):
+            ttk.Button(bar, text=text, command=cmd).pack(side="right", padx=(6, 0))
+        return bar
 
     def _bind_shortcuts(self):
         self.bind_all("<Control-f>", lambda _e: self._focus_search())
@@ -548,6 +601,30 @@ class GitHubApp(tk.Tk):
         win.bind("<Escape>", lambda _e: win.destroy())
         win.lift()
         win.focus_set()
+
+    def _show_about(self):
+        if not self._focus_in_app():
+            return
+        try:
+            self.deiconify(); self.lift()
+        except Exception:
+            pass
+        # 复用已有的"关于"窗口，避免重复打开
+        win = getattr(self, "_about_win", None)
+        if win is not None:
+            try:
+                if win.winfo_exists():
+                    win.deiconify()
+                    win.lift()
+                    win.focus_set()
+                    return
+            except tk.TclError:
+                pass
+        try:
+            self._about_win = AboutDialog(self)
+        except Exception:
+            logging.exception("打开关于窗口失败")
+            self._about_win = None
 
     def _command_palette(self):
         if not self._focus_in_app(): return
@@ -732,12 +809,16 @@ class GitHubApp(tk.Tk):
                 resample = getattr(Image, "Resampling", Image)
                 img = img.resize((96, 96), resample.LANCZOS)
                 self._login_logo = ImageTk.PhotoImage(img)
-                tk.Label(center, image=self._login_logo, bg=self.colors["BG"]).pack()
+                self._login_logo_label = tk.Label(center, image=self._login_logo,
+                                                  bg=self.colors["BG"])
+                self._login_logo_label.pack()
             except Exception as e:
                 logging.warning(f"登录 logo 加载失败: {e}")
-                ttk.Label(center, text="🐙", font=(self.ui_font, 64)).pack()
+                self._login_logo_fallback = ttk.Label(center, text="🐙", font=(self.ui_font, 64))
+                self._login_logo_fallback.pack()
         else:
-            ttk.Label(center, text="🐙", font=(self.ui_font, 64)).pack()
+            self._login_logo_fallback = ttk.Label(center, text="🐙", font=(self.ui_font, 64))
+            self._login_logo_fallback.pack()
 
         ttk.Label(center, text="GitHub 桌面客户端", style="Title.TLabel").pack(pady=(8, 4))
         ttk.Label(center, text=f"v{APP_VERSION}  ·  使用 Personal Access Token 或 OAuth Device Flow 登录",
@@ -771,7 +852,7 @@ class GitHubApp(tk.Tk):
         if env: self.token_entry.insert(0, env)
 
         self.remember_var = tk.BooleanVar(value=self.cfg.remember)
-        ttk.Checkbutton(inner, text="记住登录（保存 Token 到系统密钥环）", variable=self.remember_var).pack(anchor="w")
+        SymbolCheckbutton(inner, text="记住登录（保存 Token 到系统密钥环）", variable=self.remember_var).pack(anchor="w")
 
         btns = ttk.Frame(inner)
         btns.pack(fill="x", pady=(20, 0))
@@ -886,9 +967,7 @@ class GitHubApp(tk.Tk):
         try:
             repo = self.current_repo or "（未选择）"
             user = self.current_user or "未登录"
-            s = f"@{user}  ·  {repo}"
-            if self._scopes: s += f"  ·  scopes: {self._scopes[:40]}"
-            self.status_right.configure(text=s)
+            self.status_right.configure(text=f"@{user}  ·  {repo}")
         except Exception:
             pass
 
@@ -940,16 +1019,31 @@ class GitHubApp(tk.Tk):
         self.repo_switch_combo.pack(side="left", padx=(16, 0))
         self.repo_switch_combo.bind("<<ComboboxSelected>>", self._on_switch_repo)
 
-        theme_label = {"auto": "🌓", "light": "🌙", "dark": "☀️"}.get(self.cfg.theme, "🌓")
-        self.theme_btn = ttk.Button(header, text=theme_label, width=3, command=self.toggle_theme)
-        self.theme_btn.pack(side="right", padx=(4, 0))
-        ttk.Button(header, text="⌨️", command=self._show_shortcuts).pack(side="right", padx=(4, 0))
-        ttk.Button(header, text="👤 切换账号", command=self._switch_account).pack(side="right", padx=(4, 0))
-        ttk.Button(header, text="⚙️ 设置", command=self._open_settings).pack(side="right", padx=(4, 0))
-        ttk.Button(header, text="⬆️ 检查更新",
-                   command=lambda: self.check_update(manual=True)).pack(side="right", padx=(4, 0))
-        ttk.Button(header, text="退出登录", command=self.logout).pack(side="right", padx=(4, 0))
-        ttk.Button(header, text="🔄 刷新", command=self._refresh_current).pack(side="right", padx=(4, 0))
+        # ---- 精简后的 header：只保留高频操作 + "更多"菜单 ----
+        right = ttk.Frame(header, style="Header.TFrame")
+        right.pack(side="right")
+
+        self.refresh_btn = ttk.Button(right, text="🔄", width=3, command=self._refresh_current)
+        self.refresh_btn.pack(side="left", padx=(0, 4))
+        ttk.Button(right, text="🔍", width=3, command=self._focus_search).pack(side="left", padx=(0, 4))
+
+        more_btn = ttk.Menubutton(right, text="⋮ 更多")
+        more_menu = tk.Menu(more_btn, tearoff=False)
+        more_menu.add_command(label="📥 下载队列", command=self._show_download_queue)
+        more_menu.add_command(label="🌓 切换主题", command=self.toggle_theme)
+        more_menu.add_command(label="⬆️ 检查更新", command=lambda: self.check_update(manual=True))
+        more_menu.add_separator()
+        more_menu.add_command(label="⚙️ 设置", command=self._open_settings)
+        more_menu.add_command(label="⌨️ 快捷键", command=self._show_shortcuts)
+        more_menu.add_command(label="👥 切换账号", command=self._switch_account)
+        more_menu.add_separator()
+        more_menu.add_command(label="ℹ️ 关于", command=self._show_about)
+        more_menu.add_separator()
+        more_menu.add_command(label="🚪 退出登录", command=self.logout)
+        more_menu.add_command(label="❌ 退出程序", command=self._quit)
+        more_btn["menu"] = more_menu
+        more_btn.pack(side="left")
+
         ttk.Separator(mf, orient="horizontal").pack(fill="x")
 
         self.nb = ttk.Notebook(mf)
@@ -1004,11 +1098,6 @@ class GitHubApp(tk.Tk):
             ttk.Radiobutton(sbar, text=txt, variable=self.repo_visibility, value=val,
                             command=lambda: self.load_repos(reset=True)).pack(side="left", padx=(4, 0))
 
-        ttk.Button(sbar, text="➕ 新建仓库", style="Accent.TButton", command=self.create_repo).pack(side="right")
-        ttk.Button(sbar, text="🗑️ 删除仓库", style="Danger.TButton", command=self.delete_repo).pack(side="right",
-                                                                                                    padx=(0, 6))
-        ttk.Button(sbar, text="🚀 上传项目", command=self.upload_project).pack(side="right", padx=(0, 6))
-
         self.repo_filter_var = tk.StringVar()
         fbar = ttk.Frame(tab)
         fbar.pack(fill="x", pady=(0, 8))
@@ -1025,33 +1114,55 @@ class GitHubApp(tk.Tk):
         self.repo_tree.bind("<Button-3>", self._repo_context_menu)
         self.repo_tree.bind("<Button-2>", self._repo_context_menu)
 
-        row1 = ttk.Frame(tab)
-        row1.pack(fill="x", pady=(12, 0))
-        self.zip_btn = ttk.Button(row1, text="⬇️ 下载 ZIP", command=self._zip_for_repo_tab)
-        self.zip_btn.pack(side="left")
-        self.clone_btn = ttk.Button(row1, text="📦 git clone", command=self._clone_for_repo_tab)
-        self.clone_btn.pack(side="left", padx=(6, 0))
-        self.pull_btn = ttk.Button(row1, text="🔄 git pull", command=self._pull_for_repo_tab)
-        self.pull_btn.pack(side="left", padx=(6, 0))
-        self.detail_btn = ttk.Button(row1, text="🔍 详情", command=lambda: self._show_detail_for(self.repo_tree))
-        self.detail_btn.pack(side="left", padx=(6, 0))
-        self.asset_btn = ttk.Button(row1, text="📥 安装包", command=self._download_installer_for_repo_tab)
-        self.asset_btn.pack(side="left", padx=(6, 0))
-        ttk.Button(row1, text="📥 队列", command=self._show_download_queue).pack(side="right", padx=(0, 6))
-        ttk.Button(row1, text="⬇️ 下一页", command=lambda: self.load_repos(reset=False)).pack(side="right")
+        # 统一操作栏
+        self._make_action_bar(
+            tab,
+            primary=[("➕ 新建仓库", self.create_repo)],
+            secondary=[
+                ("⬇️ 下一页", lambda: self.load_repos(reset=False)),
+                ("📥 队列", self._show_download_queue),
+                ("📥 安装包", self._download_installer_for_repo_tab),
+                ("🔍 详情", lambda: self._show_detail_for(self.repo_tree)),
+                ("🔄 git pull", self._pull_for_repo_tab),
+                ("📦 git clone", self._clone_for_repo_tab),
+                ("⬇️ 下载 ZIP", self._zip_for_repo_tab),
+                ("🗑️ 删除仓库", self.delete_repo),
+                ("🚀 上传项目", self.upload_project),
+            ],
+        )
+
+        self.zip_btn = self._find_button(tab, "⬇️ 下载 ZIP")
+        self.clone_btn = self._find_button(tab, "📦 git clone")
+        self.pull_btn = self._find_button(tab, "🔄 git pull")
+        self.detail_btn = self._find_button(tab, "🔍 详情")
+        self.asset_btn = self._find_button(tab, "📥 安装包")
 
         self.progress = ttk.Progressbar(tab, mode="determinate", maximum=100)
+
+    def _find_button(self, parent, text):
+        """在子树中查找指定文本的按钮（用于 _busy_do 引用）。"""
+        for w in parent.winfo_children():
+            if isinstance(w, ttk.Button) and w.cget("text") == text:
+                return w
+            found = self._find_button(w, text)
+            if found is not None:
+                return found
+        return None
 
     def _apply_repo_filter(self):
         q = self.repo_filter_var.get().strip().lower()
         if not hasattr(self, "repo_tree"): return
+        # 用 tag 隐藏代替 detach/reattach，保留原始顺序
         for iid in self.repo_tree.get_children():
             if str(iid).startswith("__state__"): continue
             vals = self.repo_tree.item(iid, "values")
             if not vals: continue
+            tags = list(self.repo_tree.item(iid, "tags"))
+            base_tags = [t for t in tags if t != "hidden"]
             if not q or q in vals[0].lower():
-                self.repo_tree.reattach(iid, "", "end")
+                self.repo_tree.item(iid, tags=base_tags)
             else:
+                self.repo_tree.item(iid, tags=base_tags + ["hidden"])
                 self.repo_tree.detach(iid)
 
     def _repo_context_menu(self, e):
@@ -1225,7 +1336,13 @@ class GitHubApp(tk.Tk):
                 self.after_cancel(self._debounce_after)
             except Exception:
                 pass
-        self._debounce_after = self.after(300, self.load_issues)
+        self._debounce_after = self.after(300, self._load_issues_and_pulls)
+
+    def _load_issues_and_pulls(self):
+        """与 _on_switch_repo 行为一致：同步刷新 Issues 和 PR。"""
+        self._debounce_after = None
+        self.load_issues()
+        self.load_pulls()
 
     def create_repo(self):
         dlg = CreateRepoDialog(self)
@@ -1367,17 +1484,20 @@ class GitHubApp(tk.Tk):
             heads=("仓库", "星标", "语言", "描述"), widths=(320, 80, 130, 560))
         self.search_tree.bind("<Double-1>", lambda _e: self._show_detail_for(self.search_tree))
 
-        row1 = ttk.Frame(tab)
-        row1.pack(fill="x", pady=(12, 0))
-        self.search_zip_btn = ttk.Button(row1, text="⬇️ ZIP", command=self._zip_for_search_tab)
-        self.search_zip_btn.pack(side="left")
-        self.search_clone_btn = ttk.Button(row1, text="📦 clone", command=self._clone_for_search_tab)
-        self.search_clone_btn.pack(side="left", padx=(6, 0))
-        self.search_detail_btn = ttk.Button(row1, text="🔍 详情",
-                                            command=lambda: self._show_detail_for(self.search_tree))
-        self.search_detail_btn.pack(side="left", padx=(6, 0))
-        self.search_asset_btn = ttk.Button(row1, text="📥 安装包", command=self._download_installer_for_search_tab)
-        self.search_asset_btn.pack(side="left", padx=(6, 0))
+        self._make_action_bar(
+            tab,
+            primary=[],
+            secondary=[
+                ("🔍 详情", lambda: self._show_detail_for(self.search_tree)),
+                ("📥 安装包", self._download_installer_for_search_tab),
+                ("📦 clone", self._clone_for_search_tab),
+                ("⬇️ ZIP", self._zip_for_search_tab),
+            ],
+        )
+        self.search_zip_btn = self._find_button(tab, "⬇️ ZIP")
+        self.search_clone_btn = self._find_button(tab, "📦 clone")
+        self.search_detail_btn = self._find_button(tab, "🔍 详情")
+        self.search_asset_btn = self._find_button(tab, "📥 安装包")
         self.search_progress = ttk.Progressbar(tab, mode="determinate", maximum=100)
 
     def _on_search_typing(self, event=None):
@@ -1540,22 +1660,29 @@ class GitHubApp(tk.Tk):
         self.issue_tree.bind("<<TreeviewSelect>>", lambda _e: self._update_issue_buttons_state())
         self.issue_tree.bind("<Double-1>", lambda _e: self._open_issue_detail())
 
-        tools = ttk.Frame(tab)
-        tools.pack(fill="x", pady=(12, 0))
-        self.issue_new_btn = ttk.Button(tools, text="➕ 新建", style="Accent.TButton", command=self.new_issue)
-        self.issue_new_btn.pack(side="left")
-        self.issue_detail_btn = ttk.Button(tools, text="🔍 详情", state="disabled", command=self._open_issue_detail)
-        self.issue_detail_btn.pack(side="left", padx=(6, 0))
-        self.issue_edit_btn = ttk.Button(tools, text="✏️ 编辑", state="disabled", command=self.edit_issue)
-        self.issue_edit_btn.pack(side="left", padx=(6, 0))
-        self.issue_toggle_btn = ttk.Button(tools, text="🔒 关闭", state="disabled", command=self.toggle_issue)
-        self.issue_toggle_btn.pack(side="left", padx=(6, 0))
-        self.issue_comment_btn = ttk.Button(tools, text="💬 评论", state="disabled", command=self.comment_issue)
-        self.issue_comment_btn.pack(side="left", padx=(6, 0))
-        self.issue_delete_btn = ttk.Button(tools, text="🗑️ 删除", style="Danger.TButton", state="disabled",
-                                           command=self.delete_issue)
-        self.issue_delete_btn.pack(side="left", padx=(6, 0))
-        ttk.Button(tools, text="🔄 刷新", command=self._reload_issues).pack(side="right")
+        self._make_action_bar(
+            tab,
+            primary=[("➕ 新建", self.new_issue)],
+            secondary=[
+                ("🔄 刷新", self._reload_issues),
+                ("🗑️ 删除", self.delete_issue),
+                ("💬 评论", self.comment_issue),
+                ("🔒 关闭", self.toggle_issue),
+                ("✏️ 编辑", self.edit_issue),
+                ("🔍 详情", self._open_issue_detail),
+            ],
+        )
+        self.issue_new_btn = self._find_button(tab, "➕ 新建")
+        self.issue_detail_btn = self._find_button(tab, "🔍 详情")
+        self.issue_edit_btn = self._find_button(tab, "✏️ 编辑")
+        self.issue_toggle_btn = self._find_button(tab, "🔒 关闭")
+        self.issue_comment_btn = self._find_button(tab, "💬 评论")
+        self.issue_delete_btn = self._find_button(tab, "🗑️ 删除")
+        # 初始禁用，等选择后启用
+        for b in (self.issue_detail_btn, self.issue_edit_btn, self.issue_toggle_btn,
+                  self.issue_comment_btn, self.issue_delete_btn):
+            if b is not None:
+                b.configure(state="disabled")
 
     def _apply_issue_filter(self):
         q = self.issue_filter_var.get().strip().lower() if hasattr(self, "issue_filter_var") else ""
@@ -1580,7 +1707,7 @@ class GitHubApp(tk.Tk):
         self.load_issues()
 
     def load_issues(self, next_page=False):
-        self._debounce_after = None
+        # 注意：不要清空 self._debounce_after（那是 _on_repo_select 的计时器）
         if not self.current_repo: return
         repo = self.current_repo
         state = self.issue_state.get()
@@ -1647,13 +1774,15 @@ class GitHubApp(tk.Tk):
         sel = self.issue_tree.selection()
         has = bool(sel) and not str(sel[0]).startswith("__state__")
         state = "normal" if has else "disabled"
-        for b in (self.issue_edit_btn, self.issue_toggle_btn, self.issue_comment_btn, self.issue_delete_btn,
-                  self.issue_detail_btn):
-            b.configure(state=state)
+        for b in (self.issue_edit_btn, self.issue_toggle_btn, self.issue_comment_btn,
+                  self.issue_delete_btn, self.issue_detail_btn):
+            if b is not None:
+                b.configure(state=state)
         if has:
             vals = self.issue_tree.item(sel[0], "values")
             st = vals[2] if len(vals) > 2 else ""
-            self.issue_toggle_btn.configure(text="🔓 重新打开" if "closed" in st else "🔒 关闭")
+            if self.issue_toggle_btn is not None:
+                self.issue_toggle_btn.configure(text="🔓 重新打开" if "closed" in st else "🔒 关闭")
 
     def _fetch_labels_async(self, repo, callback):
         cached = self._labels_cache.get(repo)
@@ -1774,16 +1903,21 @@ class GitHubApp(tk.Tk):
         self.pull_tree.bind("<<TreeviewSelect>>", lambda _e: self._update_pull_buttons_state())
         self.pull_tree.bind("<Double-1>", lambda _e: self._open_pr_detail())
 
-        tools = ttk.Frame(tab)
-        tools.pack(fill="x", pady=(12, 0))
-        self.pr_detail_btn = ttk.Button(tools, text="🔍 详情", state="disabled", command=self._open_pr_detail)
-        self.pr_detail_btn.pack(side="left")
-        self.pull_merge_btn = ttk.Button(tools, text="🔀 合并", state="disabled", style="Accent.TButton",
-                                         command=self.merge_pull)
-        self.pull_merge_btn.pack(side="left", padx=(6, 0))
-        self.pull_close_btn = ttk.Button(tools, text="✖️ 关闭", state="disabled", command=self.close_pull)
-        self.pull_close_btn.pack(side="left", padx=(6, 0))
-        ttk.Button(tools, text="🔄 刷新", command=self._reload_pulls).pack(side="right")
+        self._make_action_bar(
+            tab,
+            primary=[("🔀 合并", self.merge_pull)],
+            secondary=[
+                ("🔄 刷新", self._reload_pulls),
+                ("✖️ 关闭", self.close_pull),
+                ("🔍 详情", self._open_pr_detail),
+            ],
+        )
+        self.pr_detail_btn = self._find_button(tab, "🔍 详情")
+        self.pull_merge_btn = self._find_button(tab, "🔀 合并")
+        self.pull_close_btn = self._find_button(tab, "✖️ 关闭")
+        for b in (self.pr_detail_btn, self.pull_merge_btn, self.pull_close_btn):
+            if b is not None:
+                b.configure(state="disabled")
 
     def _apply_pull_filter(self):
         q = self.pull_filter_var.get().strip().lower() if hasattr(self, "pull_filter_var") else ""
@@ -1864,9 +1998,9 @@ class GitHubApp(tk.Tk):
         sel = self.pull_tree.selection()
         has = bool(sel) and not str(sel[0]).startswith("__state__")
         st = "normal" if has else "disabled"
-        self.pull_merge_btn.configure(state=st)
-        self.pull_close_btn.configure(state=st)
-        self.pr_detail_btn.configure(state=st)
+        for b in (self.pull_merge_btn, self.pull_close_btn, self.pr_detail_btn):
+            if b is not None:
+                b.configure(state=st)
 
     def merge_pull(self):
         sel = self.pull_tree.selection()
@@ -1899,7 +2033,7 @@ class GitHubApp(tk.Tk):
         sbar = ttk.Frame(tab)
         sbar.pack(fill="x", pady=(0, 8))
         self.notify_all = tk.BooleanVar(value=False)
-        ttk.Checkbutton(sbar, text="包含已读", variable=self.notify_all, command=self.load_notifications).pack(
+        SymbolCheckbutton(sbar, text="包含已读", variable=self.notify_all, command=self.load_notifications).pack(
             side="left")
         ttk.Button(sbar, text="🔄 刷新", command=self.load_notifications).pack(side="left", padx=(10, 0))
         ttk.Button(sbar, text="标记已读", command=self.mark_notify_read).pack(side="right")
@@ -2051,14 +2185,16 @@ class GitHubApp(tk.Tk):
         self.cfg.save()
 
     def _zip_for_repo_tab(self):
-        self._run_zip(self.repo_tree, self.progress, [self.zip_btn, self.clone_btn, self.pull_btn, self.detail_btn])
+        self._run_zip(self.repo_tree, self.progress,
+                      [self.zip_btn, self.clone_btn, self.pull_btn, self.detail_btn])
 
     def _zip_for_search_tab(self):
         self._run_zip(self.search_tree, self.search_progress,
                       [self.search_zip_btn, self.search_clone_btn, self.search_detail_btn])
 
     def _clone_for_repo_tab(self):
-        self._run_clone(self.repo_tree, self.progress, [self.zip_btn, self.clone_btn, self.pull_btn, self.detail_btn])
+        self._run_clone(self.repo_tree, self.progress,
+                        [self.zip_btn, self.clone_btn, self.pull_btn, self.detail_btn])
 
     def _clone_for_search_tab(self):
         self._run_clone(self.search_tree, self.search_progress,
@@ -2227,7 +2363,6 @@ class GitHubApp(tk.Tk):
             items = items or []
             items = [n for n in items if n["repository"]["full_name"] not in self.cfg.muted_repos]
             unread = sum(1 for n in items if n.get("unread") is not False)
-            self._update_tray_badge(unread)
             if unread > self._last_unread:
                 notify_desktop("GitHub 客户端", f"收到 {unread} 条未读通知")
             self._last_unread = unread
@@ -2239,9 +2374,5 @@ class GitHubApp(tk.Tk):
         self.run_async(lambda: self.api.list_notifications(), ok, err)
 
     def _update_tray_badge(self, unread):
-        icon = getattr(self, "_tray_icon", None)
-        if icon is None: return
-        try:
-            icon.title = (f"GitHub 客户端 · {unread} 条未读" if unread else "GitHub 客户端")
-        except Exception:
-            pass
+        # 托盘功能已移除，此方法保留以兼容调用，不做任何操作
+        pass

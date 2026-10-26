@@ -65,7 +65,12 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['plyer', 'win10toast', 'tkinter.test', 'unittest'],
+    # 增加排除项，避免环境中自带的巨型数据科学库被误打包进去，显著减小体积
+    excludes=[
+        'plyer', 'win10toast', 'tkinter.test', 'unittest',
+        'pydoc', 'doctest', 'pip', 'setuptools', 'wheel', 'pytest',
+        'numpy', 'pandas', 'scipy', 'matplotlib', 'IPython',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     noarchive=False,

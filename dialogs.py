@@ -6,7 +6,7 @@ import re
 from tkinter import ttk, messagebox, filedialog
 
 from oauth import DeviceFlow
-from utils import _fmt_bytes
+from utils import _fmt_bytes, SymbolCheckbutton
 from version import __version__ as APP_VERSION
 import updater
 
@@ -25,11 +25,38 @@ def _resolve_fonts(parent):
     return ui, mono, colors, icon
 
 
+def _resolve_app(parent):
+    """找到 GitHubApp 实例，用于注册主题监听器。"""
+    if parent is None:
+        return None
+    if hasattr(parent, "register_theme_listener"):
+        return parent
+    app = getattr(parent, "app", None)
+    if app is not None and hasattr(app, "register_theme_listener"):
+        return app
+    return None
+
+
+def _register_theme(widget, parent):
+    """把 widget._apply_theme 注册到 app 的主题监听器（如果可用）。"""
+    app = _resolve_app(parent)
+    if app is None:
+        return
+    cb = getattr(widget, "_apply_theme", None)
+    if not callable(cb):
+        return
+    try:
+        app.register_theme_listener(widget, cb)
+    except Exception:
+        pass
+
+
 class IssueDialog(tk.Toplevel):
     def __init__(self, parent, title_text, initial_title="", initial_body="",
                  initial_state="open", is_edit=False, available_labels=None,
                  current_labels=None, assignees=""):
         super().__init__(parent)
+        self.app = _resolve_app(parent)
         self.title(title_text)
         self.result = None
         self.transient(parent)
@@ -134,6 +161,25 @@ class IssueDialog(tk.Toplevel):
             ttk.Radiobutton(row, text="🔴 关闭", variable=self.state_var,
                             value="closed").pack(side="left")
 
+        _register_theme(self, parent)
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        c = self.app.colors if self.app else self.colors
+        try:
+            self.body_text.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+            self.preview_text.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+            if hasattr(self, "label_list") and self.label_list.winfo_exists():
+                self.label_list.configure(
+                    bg=c["ENTRY_BG"], fg=c["FG"],
+                    selectbackground=c["ACCENT"], selectforeground="white")
+        except tk.TclError:
+            pass
+
     def _render_preview(self):
         txt = self.body_text.get("1.0", "end-1c")
         self.preview_text.configure(state="normal")
@@ -179,6 +225,7 @@ class IssueDialog(tk.Toplevel):
 class CreateRepoDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
+        self.app = _resolve_app(parent)
         self.title("新建仓库")
         self.result = None
         self.transient(parent)
@@ -214,8 +261,8 @@ class CreateRepoDialog(tk.Toplevel):
         ttk.Entry(f, textvariable=self.desc_var).pack(fill="x", pady=(4, 12))
         self.private_var = tk.BooleanVar()
         self.init_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(f, text="私有仓库", variable=self.private_var).pack(anchor="w")
-        ttk.Checkbutton(f, text="自动初始化 README",
+        SymbolCheckbutton(f, text="私有仓库", variable=self.private_var).pack(anchor="w")
+        SymbolCheckbutton(f, text="自动初始化 README",
                         variable=self.init_var).pack(anchor="w", pady=(6, 0))
 
     def _save(self):
@@ -234,6 +281,7 @@ class CreateRepoDialog(tk.Toplevel):
 class EditRepoDialog(tk.Toplevel):
     def __init__(self, parent, repo_data):
         super().__init__(parent)
+        self.app = _resolve_app(parent)
         self.title(f"编辑仓库 — {repo_data['full_name']}")
         self.result = None
         self.transient(parent)
@@ -272,9 +320,9 @@ class EditRepoDialog(tk.Toplevel):
         ttk.Entry(f, textvariable=self.topics_var).pack(fill="x", pady=(4, 12))
 
         self.private_var = tk.BooleanVar(value=bool(repo_data.get("private")))
-        ttk.Checkbutton(f, text="私有仓库", variable=self.private_var).pack(anchor="w")
+        SymbolCheckbutton(f, text="私有仓库", variable=self.private_var).pack(anchor="w")
         self.archived_var = tk.BooleanVar(value=bool(repo_data.get("archived")))
-        ttk.Checkbutton(f, text="归档（只读）", variable=self.archived_var).pack(anchor="w", pady=(6, 0))
+        SymbolCheckbutton(f, text="归档（只读）", variable=self.archived_var).pack(anchor="w", pady=(6, 0))
         self.repo_data = repo_data
 
     def _save(self):
@@ -292,6 +340,7 @@ class EditRepoDialog(tk.Toplevel):
 class CommentDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
+        self.app = _resolve_app(parent)
         self.title("发表评论")
         self.result = None
         self.transient(parent)
@@ -300,6 +349,7 @@ class CommentDialog(tk.Toplevel):
         self.minsize(450, 350)
         colors = getattr(parent, "colors", None) \
                  or getattr(getattr(parent, "app", None), "colors", {}) or {}
+        self.colors = colors
         mono = getattr(parent, "mono_font", None) \
                or getattr(getattr(parent, "app", None), "mono_font", "TkFixedFont")
         icon_path = getattr(parent, "icon_path", None) \
@@ -327,6 +377,20 @@ class CommentDialog(tk.Toplevel):
                             fg=colors.get("FG", "#000"))
         self.text.pack(fill="both", expand=True)
 
+        _register_theme(self, parent)
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        c = self.app.colors if self.app else self.colors
+        try:
+            self.text.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+        except tk.TclError:
+            pass
+
     def _ok(self):
         body = self.text.get("1.0", "end-1c").strip()
         if not body:
@@ -339,9 +403,9 @@ class CommentDialog(tk.Toplevel):
 class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, cfg):
         super().__init__(parent)
+        self.app = _resolve_app(parent)
         self.title("设置")
         self.result = None
-        self.app = parent
         self.cfg = cfg
         self.transient(parent)
         self.grab_set()
@@ -364,7 +428,11 @@ class SettingsDialog(tk.Toplevel):
 
         outer = ttk.Frame(self)
         outer.pack(fill="both", expand=True)
-        canvas = tk.Canvas(outer, borderwidth=0, highlightthickness=0)
+
+        # 用当前主题背景色初始化 canvas，避免白底闪
+        init_bg = (_colors or {}).get("BG", "#f6f8fa")
+        canvas = tk.Canvas(outer, borderwidth=0, highlightthickness=0, bg=init_bg)
+        self._scroll_canvas = canvas
         vsb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=vsb.set)
         canvas.pack(side="left", fill="both", expand=True)
@@ -434,16 +502,33 @@ class SettingsDialog(tk.Toplevel):
                         value="beta").pack(side="left")
 
         self.auto_check_var = tk.BooleanVar(value=cfg.auto_check_update)
-        ttk.Checkbutton(f, text="启动时自动检查更新",
+        SymbolCheckbutton(f, text="启动时自动检查更新",
                         variable=self.auto_check_var).pack(anchor="w")
 
         ttk.Label(f, text=f"当前版本：v{APP_VERSION}",
                   style="Hint.TLabel").pack(anchor="w", pady=(8, 0))
 
+        _register_theme(self, parent)
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        app = self.app
+        if app is None:
+            return
+        try:
+            self._scroll_canvas.configure(bg=app.colors["BG"])
+        except tk.TclError:
+            pass
+
     def _test_proxy(self):
         self.test_btn.configure(state="disabled")
         self.proxy_status.configure(text="测试中…", style="Hint.TLabel")
         proxy = self.proxy_var.get().strip()
+        app = self.app
 
         def work():
             import time
@@ -465,7 +550,8 @@ class SettingsDialog(tk.Toplevel):
             self.proxy_status.configure(
                 text=f"❌ 失败：{e}", style="Danger.TLabel")
 
-        self.app.run_async(work, ok, err)
+        if app is not None:
+            app.run_async(work, ok, err)
 
     def _save(self):
         try:
@@ -490,6 +576,7 @@ class SettingsDialog(tk.Toplevel):
 class CreatePRDialog(tk.Toplevel):
     def __init__(self, parent, branches):
         super().__init__(parent)
+        self.app = _resolve_app(parent)
         self.title("新建 Pull Request")
         self.result = None
         self.transient(parent)
@@ -497,7 +584,8 @@ class CreatePRDialog(tk.Toplevel):
         self.geometry("600x550")
         self.minsize(450, 450)
 
-        ui_font, mono, _colors, icon_path = _resolve_fonts(parent)
+        ui_font, mono, colors, icon_path = _resolve_fonts(parent)
+        self.colors = colors
         if icon_path:
             try:
                 self.iconbitmap(icon_path)
@@ -527,11 +615,27 @@ class CreatePRDialog(tk.Toplevel):
         e.focus_set()
 
         ttk.Label(f, text="描述", font=(ui_font, 10, "bold")).pack(anchor="w")
-        self.body_text = tk.Text(f, wrap="word", height=8, font=(mono, 10), undo=True)
+        self.body_text = tk.Text(
+            f, wrap="word", height=8, font=(mono, 10), undo=True,
+            bg=colors.get("ENTRY_BG", "#fff"), fg=colors.get("FG", "#000"))
         self.body_text.pack(fill="both", expand=True, pady=(4, 12))
 
         self.draft_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(f, text="作为草稿提交", variable=self.draft_var).pack(anchor="w")
+        SymbolCheckbutton(f, text="作为草稿提交", variable=self.draft_var).pack(anchor="w")
+
+        _register_theme(self, parent)
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        c = self.app.colors if self.app else self.colors
+        try:
+            self.body_text.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+        except tk.TclError:
+            pass
 
     def _save(self):
         t = self.title_var.get().strip()
@@ -551,6 +655,7 @@ class CreatePRDialog(tk.Toplevel):
 class CreateReleaseDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
+        self.app = _resolve_app(parent)
         self.title("新建 Release")
         self.result = None
         self.transient(parent)
@@ -558,7 +663,8 @@ class CreateReleaseDialog(tk.Toplevel):
         self.geometry("600x550")
         self.minsize(450, 450)
 
-        ui_font, mono, _colors, icon_path = _resolve_fonts(parent)
+        ui_font, mono, colors, icon_path = _resolve_fonts(parent)
+        self.colors = colors
         if icon_path:
             try:
                 self.iconbitmap(icon_path)
@@ -582,15 +688,31 @@ class CreateReleaseDialog(tk.Toplevel):
         ttk.Entry(f, textvariable=self.name_var).pack(fill="x", pady=(4, 12))
 
         ttk.Label(f, text="说明", font=(ui_font, 10, "bold")).pack(anchor="w")
-        self.body_text = tk.Text(f, wrap="word", height=8, font=(mono, 10), undo=True)
+        self.body_text = tk.Text(
+            f, wrap="word", height=8, font=(mono, 10), undo=True,
+            bg=colors.get("ENTRY_BG", "#fff"), fg=colors.get("FG", "#000"))
         self.body_text.pack(fill="both", expand=True, pady=(4, 12))
 
         row = ttk.Frame(f)
         row.pack(fill="x")
         self.draft_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(row, text="草稿", variable=self.draft_var).pack(side="left")
+        SymbolCheckbutton(row, text="草稿", variable=self.draft_var).pack(side="left")
         self.pre_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(row, text="预发布 (Pre-release)", variable=self.pre_var).pack(side="left", padx=(16, 0))
+        SymbolCheckbutton(row, text="预发布 (Pre-release)", variable=self.pre_var).pack(side="left", padx=(16, 0))
+
+        _register_theme(self, parent)
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        c = self.app.colors if self.app else self.colors
+        try:
+            self.body_text.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+        except tk.TclError:
+            pass
 
     def _save(self):
         tag = self.tag_var.get().strip()
@@ -622,6 +744,7 @@ class OAuthDialog(tk.Toplevel):
         self.geometry("520x360")
 
         ui_font, mono, colors, icon_path = _resolve_fonts(parent)
+        self.colors = colors
         if icon_path:
             try:
                 self.iconbitmap(icon_path)
@@ -655,7 +778,21 @@ class OAuthDialog(tk.Toplevel):
                    command=self._restart).pack(side="right", padx=(0, 8))
 
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        _register_theme(self, parent)
         self.after(100, self._start)
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        c = self.app.colors if self.app else self.colors
+        try:
+            self.link.configure(foreground=c.get("ACCENT", "#0969da"))
+        except tk.TclError:
+            pass
 
     def _safe_call(self, fn):
         try:
@@ -755,6 +892,7 @@ class UploadProjectDialog(tk.Toplevel):
 
     def __init__(self, parent, default_dir=""):
         super().__init__(parent)
+        self.app = _resolve_app(parent)
         self.title("上传项目到 GitHub")
         self.result = None
         self.transient(parent)
@@ -802,10 +940,10 @@ class UploadProjectDialog(tk.Toplevel):
         opts = ttk.Frame(f)
         opts.pack(fill="x", pady=(0, 12))
         self.private_var = tk.BooleanVar()
-        ttk.Checkbutton(opts, text="私有仓库",
+        SymbolCheckbutton(opts, text="私有仓库",
                         variable=self.private_var).pack(side="left")
         self.ignore_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opts, text="如无 .gitignore 则自动生成通用版本",
+        SymbolCheckbutton(opts, text="如无 .gitignore 则自动生成通用版本",
                         variable=self.ignore_var).pack(side="left", padx=(16, 0))
 
         ttk.Label(f, text="分支名",
@@ -880,8 +1018,13 @@ class UpdateDialog(tk.Toplevel):
         self.repo = repo
         self._downloaded = None
 
-        self._asset = updater.pick_asset(self.info.assets, channel="stable") \
-                      or updater.pick_asset(self.info.assets, channel="beta")
+        # 按用户配置的通道挑选安装包
+        channel = (getattr(getattr(self.app, "cfg", None), "update_channel", "stable") or "stable")
+        self._asset = (
+            updater.pick_asset(self.info.assets, channel=channel)
+            or updater.pick_asset(self.info.assets, channel="stable")
+            or updater.pick_asset(self.info.assets, channel="beta")
+        )
 
         self.title("发现新版本")
         self.geometry("680x600")
@@ -945,6 +1088,7 @@ class UpdateDialog(tk.Toplevel):
             fg=colors.get("FG", "#000"),
             relief="solid", bd=1, padx=8, pady=8,
         )
+        self._notes_text = notes
         vs = ttk.Scrollbar(notes_wrap, orient="vertical", command=notes.yview)
         notes.configure(yscrollcommand=vs.set)
         notes.pack(side="left", fill="both", expand=True)
@@ -968,6 +1112,20 @@ class UpdateDialog(tk.Toplevel):
         self.speed_lbl = ttk.Label(f, text="", style="Hint.TLabel")
 
         self.bind("<Escape>", lambda _e: self.destroy())
+
+        _register_theme(self, parent)
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        c = getattr(self.app, "colors", None) or self.colors
+        try:
+            self._notes_text.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+        except tk.TclError:
+            pass
 
     def _open_browser(self):
         if self.info.html_url:
@@ -1070,6 +1228,7 @@ class AssetPickerDialog(tk.Toplevel):
 
     def __init__(self, parent, repo, assets):
         super().__init__(parent)
+        self.app = _resolve_app(parent)
         self.title("选择要下载的文件")
         self.result = None
         self.transient(parent)
@@ -1078,6 +1237,7 @@ class AssetPickerDialog(tk.Toplevel):
         self.minsize(520, 360)
 
         ui_font, _mono, colors, icon_path = _resolve_fonts(parent)
+        self.colors = colors
         if icon_path:
             try:
                 self.iconbitmap(icon_path)
@@ -1132,6 +1292,22 @@ class AssetPickerDialog(tk.Toplevel):
         ttk.Button(tools, text="全选",
                    command=lambda: self.listbox.selection_set(0, "end")).pack(side="left")
         ttk.Button(tools, text="反选", command=self._invert).pack(side="left", padx=(6, 0))
+
+        _register_theme(self, parent)
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        c = self.app.colors if self.app else self.colors
+        try:
+            self.listbox.configure(
+                bg=c["ENTRY_BG"], fg=c["FG"],
+                selectbackground=c["ACCENT"], selectforeground="white")
+        except tk.TclError:
+            pass
 
     def _invert(self):
         sel = set(self.listbox.curselection())

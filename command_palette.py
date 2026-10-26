@@ -55,7 +55,30 @@ class CommandPalette(tk.Toplevel):
         self._build_items()
         self._refresh()
 
+        # 注册主题监听
+        try:
+            app.register_theme_listener(self, self._apply_theme)
+        except Exception:
+            pass
+
         self.grab_set()
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        c = self.app.colors
+        try:
+            self.listbox.configure(
+                bg=c.get("ENTRY_BG", "#fff"),
+                fg=c.get("FG", "#000"),
+                selectbackground=c.get("ACCENT", "#0969da"),
+                selectforeground="white",
+            )
+        except tk.TclError:
+            pass
 
     # ---- 构建候选条目 ----
     def _build_items(self):

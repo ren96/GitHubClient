@@ -69,7 +69,27 @@ class IssueDetailWindow(tk.Toplevel):
         ttk.Button(bar, text="🔄 刷新", command=self.reload).pack(side="right")
 
         self.issue = None
+
+        # 注册主题监听（app 若不可用则忽略）
+        try:
+            app.register_theme_listener(self, self._apply_theme)
+        except Exception:
+            pass
+
         self.reload()
+
+    def _apply_theme(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        c = self.app.colors
+        self.colors = c
+        try:
+            self.txt.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+        except tk.TclError:
+            pass
 
     def _copy_link(self):
         self.app.clipboard_clear()

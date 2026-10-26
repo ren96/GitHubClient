@@ -52,11 +52,37 @@ class RepoDetailWindow(tk.Toplevel):
         self._build_releases(self.nb)
         self._build_actions(self.nb)
 
+        try:
+            app.register_theme_listener(self, self._apply_theme)
+        except Exception:
+            pass
+
     def _alive(self):
         try:
             return bool(self.winfo_exists())
         except Exception:
             return False
+
+    def _apply_theme(self):
+        if not self._alive():
+            return
+        self.colors = self.app.colors
+        c = self.colors
+        try:
+            w = getattr(self, "_overview_txt", None)
+            if w is not None and w.winfo_exists():
+                w.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+            w = getattr(self, "_readme_content", None)
+            if w is not None and w.winfo_exists():
+                w.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+            w = getattr(self, "_readme_html", None)
+            if w is not None and w.winfo_exists():
+                w.configure(bg=c["ENTRY_BG"], fg=c["FG"])
+            # 刷新所有 Treeview 的 tag 颜色
+            for tree in self.app._iter_trees(self):
+                self.app._tag_tree(tree)
+        except tk.TclError:
+            pass
 
     def _build_header(self):
         bar = ttk.Frame(self, padding=(12, 10))
@@ -195,6 +221,7 @@ class RepoDetailWindow(tk.Toplevel):
         txt.insert("1.0", info)
         txt.configure(state="disabled")
         txt.pack(fill="both", expand=True)
+        self._overview_txt = txt
 
         right = ttk.Frame(pw, padding=(10, 0))
         pw.add(right, weight=1)
@@ -382,6 +409,7 @@ class RepoDetailWindow(tk.Toplevel):
         self.branches_tree.configure(yscrollcommand=vs.set)
         self.branches_tree.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
+        self.app._tag_tree(self.branches_tree)
         self._load_branches()
 
     def _load_branches(self):
@@ -408,6 +436,7 @@ class RepoDetailWindow(tk.Toplevel):
         self.commits_tree.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
         self.commits_tree.bind("<Double-1>", self._open_commit_diff)
+        self.app._tag_tree(self.commits_tree)
         self._load_commits()
 
     def _load_commits(self):
@@ -473,6 +502,7 @@ class RepoDetailWindow(tk.Toplevel):
         self.rel_tree.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
         self.rel_tree.bind("<Double-1>", self._open_release)
+        self.app._tag_tree(self.rel_tree)
         self._releases = {}
         self._load_releases()
 
@@ -546,6 +576,7 @@ class RepoDetailWindow(tk.Toplevel):
         self.act_tree.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
         self.act_tree.bind("<Double-1>", self._download_action_log)
+        self.app._tag_tree(self.act_tree)
         self._load_actions()
 
     def _load_actions(self):
