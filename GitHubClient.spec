@@ -10,8 +10,9 @@ if os.path.exists('tubiao/tubiao.ico'):
 if os.path.exists('tubiao/logo.png'):
     _datas.append(('tubiao/logo.png', 'tubiao'))
 
-# 复制几个包的元数据（运行时可能通过 importlib.metadata 反查）
-for _pkg in ('keyring', 'markdown', 'pystray'):
+# 复制运行时可能通过 importlib.metadata 反查的包元数据
+# 与 about.py 的 _collect_deps() 依赖列表保持一致
+for _pkg in ('requests', 'keyring', 'Pillow', 'markdown', 'tkhtmlview'):
     try:
         _datas += copy_metadata(_pkg)
     except Exception:
@@ -19,11 +20,6 @@ for _pkg in ('keyring', 'markdown', 'pystray'):
 
 # ---------- 隐式导入 ----------
 _hidden = [
-    # pystray 各平台后端
-    'pystray._win32',
-    'pystray._darwin',
-    'pystray._xorg',
-
     # keyring 各平台后端
     'keyring.backends.Windows',
     'keyring.backends.macOS',
@@ -36,8 +32,6 @@ _hidden = [
     # markdown 扩展（repo_detail.py 动态传入字符串，静态分析扫不到）
     'markdown.extensions.fenced_code',
     'markdown.extensions.tables',
-    'markdown.extensions.extra',
-    'markdown.extensions.nl2br',
 
     # README 渲染库
     'tkhtmlview',
@@ -65,10 +59,13 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # 增加排除项，避免环境中自带的巨型数据科学库被误打包进去，显著减小体积
+    # 排除环境中自带的巨型数据科学库与不必要模块，显著减小体积
+    # 注意：'unittest' 不能整体排除（requests/keyring 可能用到 unittest.mock），
+    # 只排除 unittest.test
     excludes=[
-        'plyer', 'win10toast', 'tkinter.test', 'unittest',
-        'pydoc', 'doctest', 'pip', 'setuptools', 'wheel', 'pytest',
+        'plyer', 'win10toast', 'tkinter.test',
+        'unittest.test', 'pydoc', 'doctest',
+        'pip', 'setuptools', 'wheel', 'pytest',
         'numpy', 'pandas', 'scipy', 'matplotlib', 'IPython',
     ],
     win_no_prefer_redirects=False,
