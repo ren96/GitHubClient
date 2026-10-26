@@ -225,6 +225,9 @@ class GitHubAPI:
              "{ clientMutationId } }")
         r = self.s.post(GRAPHQL, json={"query": q, "variables": {"id": node_id}},
                         timeout=20)
+        if r.status_code in (403, 429) and r.headers.get("X-RateLimit-Remaining") == "0":
+            reset = int(r.headers.get("X-RateLimit-Reset", "0"))
+            raise RateLimitError(reset)
         if r.status_code >= 400:
             raise RuntimeError(f"HTTP {r.status_code}: {r.content[:300]}")
         data = r.json()
@@ -261,9 +264,13 @@ class GitHubAPI:
         return self._req("GET", f"/repos/{repo}/commits", params=params)
 
     def get_commit_diff(self, repo, sha):
+        # ⭐ 补充限流检查，与 _req 行为一致
         r = self.s.get(f"{API}/repos/{repo}/commits/{sha}",
                        headers={"Accept": "application/vnd.github.diff"},
                        timeout=30)
+        if r.status_code in (403, 429) and r.headers.get("X-RateLimit-Remaining") == "0":
+            reset = int(r.headers.get("X-RateLimit-Reset", "0"))
+            raise RateLimitError(reset)
         if r.status_code >= 400:
             raise RuntimeError(f"HTTP {r.status_code}")
         return r.text
@@ -396,9 +403,13 @@ class GitHubAPI:
                          params={"per_page": 100})
 
     def get_pull_diff(self, repo, number):
+        # ⭐ 补充限流检查，与 _req 行为一致
         r = self.s.get(f"{API}/repos/{repo}/pulls/{number}",
                        headers={"Accept": "application/vnd.github.diff"},
                        timeout=30)
+        if r.status_code in (403, 429) and r.headers.get("X-RateLimit-Remaining") == "0":
+            reset = int(r.headers.get("X-RateLimit-Reset", "0"))
+            raise RateLimitError(reset)
         if r.status_code >= 400:
             raise RuntimeError(f"HTTP {r.status_code}")
         return r.text

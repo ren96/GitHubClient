@@ -8,6 +8,8 @@ class PRDetailWindow(tk.Toplevel):
     def __init__(self, app, repo, number):
         super().__init__(app)
         self.app = app
+        # ⭐ 新增：让 _tag_tree 能取到配色
+        self.colors = getattr(app, "colors", {})
         self.repo = repo
         self.number = number
         self.title(f"{repo} #{number}")
@@ -45,7 +47,6 @@ class PRDetailWindow(tk.Toplevel):
         ttk.Button(bar, text="💬 评论", command=lambda: self._review("COMMENT")
                    ).pack(side="left", padx=(6, 0))
 
-        # 合并下拉菜单
         self.merge_btn = ttk.Menubutton(bar, text="🔀 合并", style="Accent.TButton")
         m_menu = tk.Menu(self.merge_btn, tearoff=False)
         m_menu.add_command(label="Create a merge commit", command=lambda: self._merge("merge"))
@@ -70,6 +71,7 @@ class PRDetailWindow(tk.Toplevel):
         except tk.TclError:
             return
         c = self.app.colors
+        self.colors = c
         try:
             self.txt.configure(bg=c["ENTRY_BG"], fg=c["FG"])
             self.diff_txt.configure(bg=c["ENTRY_BG"], fg=c["FG"])
@@ -191,7 +193,9 @@ class PRDetailWindow(tk.Toplevel):
                 self.repo, self.number, event, dlg.result or ""), ok)
 
     def _merge(self, method):
-        if not messagebox.askyesno("合并", f"确定使用 {method} 方式合并 PR #{self.number}？", parent=self):
+        if not messagebox.askyesno("合并",
+                                   f"确定使用 {method} 方式合并 PR #{self.number}？",
+                                   parent=self):
             return
 
         def ok(res):

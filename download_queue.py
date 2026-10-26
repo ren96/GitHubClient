@@ -14,7 +14,7 @@ class DownloadTask:
         self.dest = dest
         self.progress = 0.0
         self.speed = 0.0
-        self.status = "等待中"  # 等待中 / 下载中 / 已暂停 / 失败 / 完成
+        self.status = "等待中"
         self.error = ""
         self.path = ""
         self.size = asset.get("size", 0)
@@ -27,6 +27,8 @@ class DownloadQueueWindow(tk.Toplevel):
     def __init__(self, app):
         super().__init__(app)
         self.app = app
+        # ⭐ 新增：让 _tag_tree 能取到配色
+        self.colors = getattr(app, "colors", {})
         self.title("下载队列")
         self.geometry("760x480")
         self.transient(app)
@@ -75,7 +77,6 @@ class DownloadQueueWindow(tk.Toplevel):
         threading.Thread(target=self._run, daemon=True).start()
         self._poll_refresh()
 
-    # ---- 生命周期 ----
     def _on_close(self):
         self._stop = True
         try:
@@ -100,13 +101,11 @@ class DownloadQueueWindow(tk.Toplevel):
     def _schedule_refresh(self):
         self._refresh_q.put(None)
 
-    # ---- 外部 API ----
     def add(self, task: DownloadTask):
         with self._lock:
             self.tasks.append(task)
         self._schedule_refresh()
 
-    # ---- UI ----
     def _toggle_pause(self):
         self._paused = not self._paused
         self.btn_pause.configure(text="▶ 继续全部" if self._paused else "⏸ 暂停全部")
@@ -154,7 +153,6 @@ class DownloadQueueWindow(tk.Toplevel):
         except tk.TclError:
             pass
 
-    # ---- 调度 ----
     def _next(self):
         with self._lock:
             for t in self.tasks:
